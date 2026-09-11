@@ -1,0 +1,227 @@
+{
+  "$schema_note": "Template for a Product Requirements Document (PRD). Replace all <PLACEHOLDER> values with real content. Delete this key before use. Arrays show one example item — duplicate as needed. See sample_prd.json for a fully-filled reference.",
+
+  "project": {
+    "name": "<PROJECT_FULL_NAME>",
+    "short_name": "<PROJECT_SHORT_NAME_OR_ACRONYM>",
+    "description": "<ONE_TO_TWO_PARAGRAPH_ELEVATOR_PITCH>",
+    "version": "<SEMVER_OR_DRAFT_TAG e.g. 1.0.0-draft>",
+    "platform": "<TARGET_PLATFORMS e.g. Web + Mobile + API>",
+    "backend": "<BACKEND_STACK_SUMMARY>",
+    "last_updated": "<YYYY-MM-DD>",
+    "source_prd": "<PATH_TO_SOURCE_MARKDOWN_PRD>",
+    "stack_decision": "<ONE_LINE_STACK_ADR_SUMMARY>",
+    "market_decision": "<ONE_LINE_MARKET_ADR_SUMMARY>",
+
+    "policies": {
+      "<POLICY_GROUP_NAME e.g. job_posting>": {
+        "<POLICY_KEY_1>": "<VALUE_OR_NUMBER>",
+        "<POLICY_KEY_2>": "<VALUE_OR_NUMBER>"
+      },
+      "<POLICY_GROUP_NAME_2 e.g. submission_caps>": {
+        "<POLICY_KEY>": "<VALUE>",
+        "tier_bounds": {
+          "<TIER_ID e.g. free>": {
+            "<LIMIT_KEY>": "<NUMBER>"
+          }
+        }
+      }
+    },
+
+    "workflow_states_additional": [
+      "<EXTRA_WORKFLOW_STATE_ENUM_VALUE>"
+    ],
+
+    "implementation_progress": {
+      "<PHASE_ID e.g. phase_0>": {
+        "state": "<not_started | in_progress | shipped>",
+        "adr": "<PATH_TO_ADR_MD>",
+        "summary": "<PROSE_SUMMARY_OF_WHAT_SHIPPED_IN_THIS_PHASE>",
+        "stories_touched": [
+          "<USER_STORY_ID e.g. US-1.1>"
+        ]
+      }
+    },
+
+    "next_planned_features": [
+      {
+        "rank": 1,
+        "title": "<STORY_ID_OR_TITLE — SHORT_DESCRIPTION>",
+        "rationale": "<WHY_THIS_IS_NEXT_AND_WHAT_IT_UNBLOCKS>",
+        "scope_hours": 0,
+        "blocking_story_ids": ["<US-X.Y>"],
+        "unlocked_story_ids": ["<US-A.B>"],
+        "blocked_by": ["<EXTERNAL_DECISION_OR_CREDENTIAL_NEEDED>"]
+      }
+    ],
+
+    "lessons_learned": [
+      {
+        "id": "<KEBAB_CASE_LESSON_ID>",
+        "summary": "<ONE_TO_THREE_SENTENCE_LESSON_INCLUDING_THE_WHY>"
+      }
+    ]
+  },
+
+  "strategy_pivot": {
+    "version": "<PIVOT_VERSION_LABEL e.g. v2>",
+    "brand": "<NEW_BRAND_NAME_IF_ANY>",
+    "adopted": "<YYYY-MM-DD>",
+    "source_document": "<PATH_TO_BUSINESS_PLAN_OR_MEMO>",
+    "summary_document": "<PATH_TO_PRD_SECTION_SUMMARY>",
+    "supersedes": "<WHAT_THIS_REPLACES_AND_WHAT_STILL_STANDS>",
+    "rationale": "<WHY_THE_PIVOT_HAPPENED>",
+
+    "scope_change": {
+      "active_mvp_epics": ["<EPIC_ID>"],
+      "active_mvp_features": ["<FEATURE_NAME>"],
+      "deferred_post_revenue": ["<EPIC_OR_STORY_ID>"]
+    },
+
+    "architecture_change": {
+      "<CHANGE_KEY e.g. workflow_engine>": "<FROM → TO>",
+      "preserved": ["<COMPONENT_THAT_SURVIVED_THE_PIVOT>"]
+    },
+
+    "commercial_model": {
+      "primary": "<PRIMARY_MONETIZATION_DESCRIPTION>",
+      "free_tier": "<FREE_TIER_LIMITS>",
+      "refund_policy": "<REFUND_TERMS>",
+      "subscription_trigger": "<WHEN_TO_ADD_SUBSCRIPTION_TIER>",
+      "addons_month_6_plus": ["<ADDON_NAME_AND_PRICE>"],
+      "break_even": "<CUSTOMERS_OR_MRR_REQUIRED>"
+    },
+
+    "phases": [
+      {
+        "id": "<PHASE_ID>",
+        "name": "<PHASE_NAME>",
+        "duration": "<HUMAN_READABLE_DURATION>",
+        "status": "<not_started | in_progress | complete>",
+        "branch": "<GIT_BRANCH_IF_APPLICABLE>",
+        "precondition": "<WHAT_MUST_BE_TRUE_BEFORE_STARTING>",
+        "deliverables": ["<CONCRETE_DELIVERABLE>"],
+        "gate": {
+          "id": "<GATE_ID e.g. G1>",
+          "criteria": ["<MEASURABLE_PASS_CRITERION>"],
+          "decision_if_failed": "<WHAT_TO_DO_IF_GATE_FAILS>"
+        },
+        "milestones": ["<OPTIONAL_LATER_MILESTONE>"]
+      }
+    ],
+
+    "operating_constraints": {
+      "team": "<TEAM_SHAPE e.g. Solo founder + AI agents>",
+      "total_budget_year_1_usd": [0, 0],
+      "monthly_operating_target_usd": [0, 0],
+      "monthly_cost_breakdown": {
+        "<LINE_ITEM_KEY>": 0
+      }
+    }
+  },
+
+  "target_markets": [
+    {
+      "id": "<MARKET_ID e.g. us>",
+      "name": "<MARKET_DISPLAY_NAME>",
+      "status": "<primary | secondary | phase_2>",
+      "ui_language": "<LANGUAGES_SUPPORTED_IN_UI>",
+      "notes": "<LOCALE_FORMATTING_REGULATORY_NOTES>"
+    }
+  ],
+
+  "submission_paths": [
+    {
+      "rank": 1,
+      "id": "<PATH_ID>",
+      "name": "<HUMAN_READABLE_PATH_NAME>",
+      "when": "<CONDITION_UNDER_WHICH_THIS_PATH_APPLIES>",
+      "confidence": "<highest | high | medium | variable | deterministic | human-in-the-loop>",
+      "cost": "<lowest | low | medium | high | n/a>"
+    }
+  ],
+
+  "ats_coverage": {
+    "<COVERAGE_BUCKET e.g. mvp_us>": ["<VENDOR_SLUG>"]
+  },
+
+  "personas": [
+    {
+      "id": "<PERSONA_ID>",
+      "name": "<PERSONA_NAME>",
+      "role": "<ROLE_LABEL>",
+      "is_primary": false,
+      "market": "<MARKET_ID_OR_platform>",
+      "description": "<WHO_THEY_ARE_WHAT_THEY_NEED_WHAT_KPI_MATTERS>"
+    }
+  ],
+
+  "development_standards": {
+    "testing": {
+      "methodology": "<e.g. TDD>",
+      "pattern": "<e.g. AAA>",
+      "requirements": ["<CONCRETE_TESTING_REQUIREMENT>"]
+    },
+    "delivery": {
+      "branching": "<BRANCHING_STRATEGY>",
+      "ci_gates": ["<CI_CHECK_NAME>"],
+      "release": "<RELEASE_STRATEGY>",
+      "adr_required_for": ["<CATEGORY_REQUIRING_AN_ADR>"]
+    }
+  },
+
+  "success_metrics": [
+    {
+      "id": "<METRIC_ID>",
+      "name": "<METRIC_DISPLAY_NAME>",
+      "target_12mo": "<TARGET_WITH_UNIT e.g. ≥ 6%>",
+      "definition": "<HOW_THE_METRIC_IS_CALCULATED>"
+    }
+  ],
+
+  "slos": [
+    {
+      "journey": "<USER_JOURNEY_OR_SURFACE>",
+      "target": "<SLO_TARGET>",
+      "error_budget": "<ERROR_BUDGET_IF_APPLICABLE>"
+    }
+  ],
+
+  "epics": [
+    {
+      "id": "<EPIC_ID e.g. epic-1>",
+      "name": "<EPIC_NAME>",
+      "status": "<planned | in_progress | shipped | deferred-post-revenue>",
+      "description": "<WHAT_THIS_EPIC_ACCOMPLISHES>",
+      "user_stories": [
+        {
+          "id": "<STORY_ID e.g. US-1.1>",
+          "title": "<STORY_TITLE>",
+          "description": "<AS_A_X_I_WANT_Y_SO_THAT_Z>",
+          "status": "<planned | in_progress | done | deferred>",
+          "priority": "<MVP | P1 | P2 | later>",
+          "acceptance_criteria": [
+            {
+              "id": "<AC_ID e.g. AC-1.1.1>",
+              "description": "<ONE_LINE_ACCEPTANCE_CRITERION>",
+              "done": false,
+              "aaa": {
+                "arrange": "<PRECONDITIONS_AND_TEST_INPUTS>",
+                "act": "<ACTION_UNDER_TEST>",
+                "assert": "<EXPECTED_OBSERVABLE_OUTCOME>"
+              }
+            }
+          ],
+          "implementation": {
+            "files": ["<REPO_RELATIVE_PATH>"],
+            "notes": "<IMPLEMENTATION_NOTES_AND_PARTNER_COMPONENTS>",
+            "state": "<not_started | in_progress | done>",
+            "phase": "<PHASE_ID_OR_null>",
+            "evidence": "<WHAT_PROVES_THIS_IS_DONE e.g. test IDs, migrations>",
+            "ac_done": ["<AC_ID>"]
+          }
+        }
+      ]
+    }
+  ]
+}

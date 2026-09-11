@@ -1,0 +1,462 @@
+{
+  "project": {
+    "name": "Tank Siege",
+    "short_name": "TankSiege",
+    "description": "Tank Siege is a browser-based top-down tank shooter inspired by the browser classic Awesome Tanks 2. Players pilot an upgradeable tank through escalating waves of AI-controlled enemy tanks and turrets, earning coins and XP from kills to unlock weapons, armor, and mobility upgrades. The game targets the same fast, arcade-y, one-more-wave loop as the original, rebuilt as a modern responsive web app playable on desktop and mobile browsers with a persistent meta-progression economy.",
+    "version": "0.2.0-draft",
+    "platform": "Web (responsive browser — desktop + mobile)",
+    "backend": "Lightweight cloud save + leaderboard service (player profile, coin balance, unlock state, wave high scores), hosted as a thin web API/BaaS, with client-authoritative gameplay and server-validated economy transactions to prevent coin tampering.",
+    "last_updated": "2026-09-11",
+    "source_prd": "awesome-tanks-2-competitor-prd.json",
+    "stack_decision": "Browser-based web game stack (e.g. HTML5 Canvas/WebGL via a JS/TS game framework such as Phaser or PixiJS) with a thin backend (managed BaaS or lightweight API) for save sync and anti-cheat validation of coin balances.",
+    "market_decision": "Free-to-play browser-based arcade/casual market, monetized via optional ads and cosmetic/convenience purchases through a web payment provider; the core coin economy (including the God Gun) remains earn-only to preserve skill/grind progression rather than pay-to-win.",
+
+    "policies": {
+      "coin_economy": {
+        "earn_sources": "Enemy kills, wave-clear bonuses, daily login bonus, mission rewards",
+        "real_money_purchasable": false,
+        "rationale": "Coins are earn-only so that high-cost unlocks like the God Gun remain a grind-based prestige reward rather than a pay-to-win purchase"
+      },
+      "god_gun": {
+        "cost_coins": 1000000,
+        "effect": "instant_defeat_single_target",
+        "targeting": "single enemy, player-selected",
+        "uses_per_purchase": 1,
+        "applies_to_bosses": false,
+        "cooldown": "none (single-use consumable, must be re-purchased for 1,000,000 coins each use)",
+        "confirmation_required": true
+      }
+    },
+
+    "workflow_states_additional": [
+      "in_playtest"
+    ],
+
+    "implementation_progress": {
+      "phase_0": {
+        "state": "not_started",
+        "adr": "n/a",
+        "summary": "Project has not yet started implementation; this PRD represents the initial planned scope.",
+        "stories_touched": []
+      }
+    },
+
+    "next_planned_features": [
+      {
+        "rank": 1,
+        "title": "US-2.1 — God Gun purchase and instant-defeat weapon",
+        "rationale": "The God Gun is the signature high-end progression reward that gives long-term players a coin sink and a satisfying end-game power fantasy; it depends on the core coin economy and combat loop already existing.",
+        "scope_hours": 24,
+        "blocking_story_ids": ["US-1.1", "US-1.3"],
+        "unlocked_story_ids": [],
+        "blocked_by": []
+      }
+    ],
+
+    "lessons_learned": []
+  },
+
+  "strategy_pivot": {
+    "version": "v2",
+    "brand": "Tank Siege",
+    "adopted": "2026-09-11",
+    "source_document": "awesome-tanks-2-competitor-prd.json",
+    "summary_document": "n/a",
+    "supersedes": "v1 (adopted 2026-09-04) — the native mobile app (iOS + Android) platform and distribution decision. Core gameplay scope (epic-1, epic-2), personas, and coin economy policies from v1 are unchanged.",
+    "rationale": "Pivoting from a native mobile app (iOS + Android) to a browser-based web game to avoid App Store/Play Store review friction and the platform fee cut, and to enable instant updates without app store release cycles.",
+
+    "scope_change": {
+      "active_mvp_epics": ["epic-1", "epic-2"],
+      "active_mvp_features": ["Core tank movement and shooting", "Wave-based enemy spawning", "Coin economy and upgrades", "Upgrade shop for weapons/armor/mobility", "God Gun instant-defeat weapon"],
+      "deferred_post_revenue": ["epic-3 — PvP multiplayer arena", "epic-4 — Clan/social features"]
+    },
+
+    "architecture_change": {
+      "distribution": "Native mobile app (iOS + Android) -> browser-based web app (HTML5/WebGL, desktop + mobile-responsive)",
+      "preserved": ["top-down twin-stick style combat", "wave-survival core loop", "coin-based upgrade progression"]
+    },
+
+    "commercial_model": {
+      "primary": "Free-to-play with optional rewarded/interstitial ads and cosmetic purchases (skins, tank paint jobs)",
+      "free_tier": "Full core game (all waves, all coin-earned upgrades including the God Gun) is playable without spending money",
+      "refund_policy": "Standard refund terms via the web payment provider (e.g. Stripe) for cosmetic purchases; no refunds on consumed in-game coins",
+      "subscription_trigger": "Not planned for MVP; revisit if a cosmetic-only battle pass shows demand post-launch",
+      "addons_month_6_plus": ["Cosmetic tank skin packs ($1.99-$4.99)"],
+      "break_even": "n/a for MVP — success measured on retention and engagement metrics before monetization scale-up"
+    },
+
+    "phases": [
+      {
+        "id": "phase_0",
+        "name": "Core Gameplay Prototype",
+        "duration": "6 weeks",
+        "status": "not_started",
+        "branch": "n/a",
+        "precondition": "Web game framework and hosting scaffolding selected",
+        "deliverables": ["Playable tank movement + shooting", "Single enemy type wave spawner", "Basic coin drop and HUD"],
+        "gate": {
+          "id": "G1",
+          "criteria": ["Core loop is fun in internal playtest", "60fps on mid-tier target devices in supported browsers"],
+          "decision_if_failed": "Revisit control scheme or performance budget before continuing"
+        },
+        "milestones": []
+      }
+    ],
+
+    "operating_constraints": {
+      "team": "Small indie team (2-4 people) + AI-assisted development",
+      "total_budget_year_1_usd": [20000, 60000],
+      "monthly_operating_target_usd": [500, 2000],
+      "monthly_cost_breakdown": {
+        "backend_hosting": 150,
+        "payment_processor_fees": 0,
+        "art_and_audio_contractors": 800
+      }
+    }
+  },
+
+  "target_markets": [
+    {
+      "id": "us",
+      "name": "United States",
+      "status": "primary",
+      "ui_language": "English",
+      "notes": "Primary launch market; standard web accessibility and data-privacy compliance (e.g. CCPA), COPPA-aware design since arcade shooters attract younger players."
+    },
+    {
+      "id": "global_en",
+      "name": "Global English-speaking markets (UK, Canada, Australia, etc.)",
+      "status": "secondary",
+      "ui_language": "English",
+      "notes": "Same build as US market; no additional localization required for initial launch."
+    }
+  ],
+
+  "personas": [
+    {
+      "id": "casual_grinder",
+      "name": "Casey the Casual Grinder",
+      "role": "Primary player",
+      "is_primary": true,
+      "market": "us",
+      "description": "Plays in short 5-10 minute mobile sessions during downtime. Wants quick, satisfying wave-clear runs and steady visible progress on upgrades. Cares about session length fitting a commute, and about coin balance feeling like it's always going somewhere useful."
+    },
+    {
+      "id": "completionist_veteran",
+      "name": "Val the Completionist Veteran",
+      "role": "High-engagement player",
+      "is_primary": false,
+      "market": "us",
+      "description": "Has played for weeks, cleared most standard upgrades, and is actively grinding toward big-ticket unlocks like the 1,000,000-coin God Gun. Cares about long-term goals, leaderboard standing, and having a satisfying 'end-game' power fantasy to work toward."
+    }
+  ],
+
+  "development_standards": {
+    "testing": {
+      "methodology": "TDD",
+      "pattern": "AAA",
+      "requirements": [
+        "Gameplay economy logic (coin balance, deductions, God Gun purchase) must have automated unit tests covering success and insufficient-funds paths",
+        "Combat/damage resolution (including instant-defeat effects) must have automated tests verifying correct target elimination and no unintended side effects on other enemies"
+      ]
+    },
+    "delivery": {
+      "branching": "Feature branches off main, merged via PR",
+      "ci_gates": ["build", "unit tests", "lint"],
+      "release": "Staged web rollout via feature flags / percentage-based canary deploys behind a CDN",
+      "adr_required_for": ["coin economy balance changes", "monetization model changes", "God Gun rules changes"]
+    }
+  },
+
+  "success_metrics": [
+    {
+      "id": "d1_retention",
+      "name": "Day 1 Retention",
+      "target_12mo": "≥ 35%",
+      "definition": "Percentage of new players that return to play again on the calendar day after their first session"
+    },
+    {
+      "id": "d7_retention",
+      "name": "Day 7 Retention",
+      "target_12mo": "≥ 12%",
+      "definition": "Percentage of new players that return to play again 7 days after their first session"
+    },
+    {
+      "id": "god_gun_redemption_rate",
+      "name": "God Gun Redemption Rate",
+      "target_12mo": "≥ 2% of D30-retained players",
+      "definition": "Percentage of players still active at day 30 who have accumulated and spent 1,000,000 coins on a God Gun at least once"
+    }
+  ],
+
+  "slos": [
+    {
+      "journey": "In-wave combat gameplay",
+      "target": "≥ 60fps on mid-tier target devices (released within last 3 years)",
+      "error_budget": "Frame drops below 45fps in < 1% of session time"
+    },
+    {
+      "journey": "Web page load to playable",
+      "target": "≤ 3 seconds",
+      "error_budget": "n/a"
+    }
+  ],
+
+  "epics": [
+    {
+      "id": "epic-1",
+      "name": "Core Combat & Progression",
+      "status": "planned",
+      "description": "The foundational gameplay loop: tank movement and shooting, AI enemy waves, coin drops on kills, and a coin-driven upgrade shop for weapons/armor/mobility. This scaffolding is a prerequisite for the God Gun to have coins, enemies, and combat to act on.",
+      "user_stories": [
+        {
+          "id": "US-1.1",
+          "title": "Basic tank movement and shooting",
+          "description": "As a player, I want to move my tank and fire its cannon using touch controls, so that I can engage enemies in combat.",
+          "status": "planned",
+          "priority": "MVP",
+          "acceptance_criteria": [
+            {
+              "id": "AC-1.1.1",
+              "description": "Player can move the tank in any direction using an on-screen virtual joystick",
+              "done": false,
+              "aaa": {
+                "arrange": "Player is on the wave-survival screen with a tank spawned at the starting position",
+                "act": "Player drags the on-screen movement joystick in a given direction",
+                "assert": "Tank moves smoothly in that direction at the defined movement speed"
+              }
+            },
+            {
+              "id": "AC-1.1.2",
+              "description": "Player can aim and fire the tank's cannon independently of movement",
+              "done": false,
+              "aaa": {
+                "arrange": "Player's tank is active on screen with at least one enemy visible",
+                "act": "Player drags the on-screen aim/fire control toward an enemy and releases",
+                "assert": "A projectile fires from the tank toward the aimed direction and can damage an enemy on hit"
+              }
+            }
+          ],
+          "implementation": {
+            "files": [],
+            "notes": "n/a",
+            "state": "not_started",
+            "phase": "phase_0",
+            "evidence": "n/a",
+            "ac_done": []
+          }
+        },
+        {
+          "id": "US-1.2",
+          "title": "Wave-based enemy spawning",
+          "description": "As a player, I want enemy tanks to spawn in escalating waves, so that the game continually challenges me and gives me a sense of progression within a run.",
+          "status": "planned",
+          "priority": "MVP",
+          "acceptance_criteria": [
+            {
+              "id": "AC-1.2.1",
+              "description": "Each wave spawns a defined set of enemies that scales in count and/or difficulty as waves progress",
+              "done": false,
+              "aaa": {
+                "arrange": "Player starts a new run at wave 1",
+                "act": "Player clears all enemies in wave 1",
+                "assert": "Wave 2 spawns with an equal or greater number/difficulty of enemies than wave 1"
+              }
+            }
+          ],
+          "implementation": {
+            "files": [],
+            "notes": "n/a",
+            "state": "not_started",
+            "phase": "phase_0",
+            "evidence": "n/a",
+            "ac_done": []
+          }
+        },
+        {
+          "id": "US-1.3",
+          "title": "Coin drops and persistent coin balance",
+          "description": "As a player, I want to earn coins from defeating enemies and keep that balance saved between sessions, so that I can accumulate enough currency to afford upgrades and high-cost items like the God Gun.",
+          "status": "planned",
+          "priority": "MVP",
+          "acceptance_criteria": [
+            {
+              "id": "AC-1.3.1",
+              "description": "Defeating an enemy adds a defined coin amount to the player's balance",
+              "done": false,
+              "aaa": {
+                "arrange": "Player's coin balance is at a known value N and an enemy with a known coin reward R is on screen",
+                "act": "Player defeats that enemy",
+                "assert": "Player's coin balance becomes N + R"
+              }
+            },
+            {
+              "id": "AC-1.3.2",
+              "description": "Coin balance persists across app restarts via cloud/local save",
+              "done": false,
+              "aaa": {
+                "arrange": "Player has a coin balance of N and closes the app",
+                "act": "Player reopens the app",
+                "assert": "Player's coin balance is still N"
+              }
+            }
+          ],
+          "implementation": {
+            "files": [],
+            "notes": "n/a",
+            "state": "not_started",
+            "phase": "phase_0",
+            "evidence": "n/a",
+            "ac_done": []
+          }
+        },
+        {
+          "id": "US-1.4",
+          "title": "Upgrade shop for weapons, armor, and mobility",
+          "description": "As a player, I want to spend coins in an upgrade shop to buy and equip weapon, armor, and mobility upgrades for my tank, so that I feel steady, visible progress between wave runs.",
+          "status": "planned",
+          "priority": "MVP",
+          "acceptance_criteria": [
+            {
+              "id": "AC-1.4.1",
+              "description": "Player can view available weapon, armor, and mobility upgrades along with their coin cost and current owned/equipped state",
+              "done": false,
+              "aaa": {
+                "arrange": "Player has a known coin balance and opens the upgrade shop",
+                "act": "Player browses the weapon, armor, and mobility upgrade lists",
+                "assert": "Each upgrade displays its coin cost, a description, and whether it is currently owned and/or equipped"
+              }
+            },
+            {
+              "id": "AC-1.4.2",
+              "description": "Purchasing an upgrade deducts its coin cost from the player's balance and unlocks it permanently",
+              "done": false,
+              "aaa": {
+                "arrange": "Player's coin balance is at least the cost C of an unowned upgrade",
+                "act": "Player purchases that upgrade",
+                "assert": "Player's coin balance decreases by exactly C and the upgrade is marked owned and persists across app restarts"
+              }
+            },
+            {
+              "id": "AC-1.4.3",
+              "description": "An upgrade cannot be purchased if the player has insufficient coins",
+              "done": false,
+              "aaa": {
+                "arrange": "Player's coin balance is less than the cost C of an unowned upgrade",
+                "act": "Player attempts to purchase that upgrade",
+                "assert": "The purchase is blocked or disabled, no coins are deducted, and the upgrade remains locked"
+              }
+            },
+            {
+              "id": "AC-1.4.4",
+              "description": "Player can equip one owned upgrade per slot (weapon, armor, mobility) and the equipped upgrade takes effect in the next run",
+              "done": false,
+              "aaa": {
+                "arrange": "Player owns more than one upgrade in a single slot category (e.g. two weapon upgrades)",
+                "act": "Player selects and equips one of the owned upgrades in that slot",
+                "assert": "That upgrade becomes the active one for the slot, and its effect (e.g. weapon fire pattern, damage mitigation, movement speed) applies starting with the player's next run"
+              }
+            }
+          ],
+          "implementation": {
+            "files": [],
+            "notes": "Depends on persistent coin balance (US-1.3). Upgrade effects (weapon fire patterns, armor damage mitigation, mobility speed) should be defined in a shared config/data table rather than hardcoded, to keep balancing changes low-risk.",
+            "state": "not_started",
+            "phase": "phase_0",
+            "evidence": "n/a",
+            "ac_done": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "epic-2",
+      "name": "God Gun",
+      "status": "planned",
+      "description": "A premium, coin-gated weapon that instantly defeats a single targeted enemy. Serves as the game's headline high-end coin sink and end-game power fantasy for highly engaged players, while remaining earn-only so it never becomes pay-to-win.",
+      "user_stories": [
+        {
+          "id": "US-2.1",
+          "title": "Purchase and fire the God Gun",
+          "description": "As a player, I want to spend 1,000,000 coins to fire a God Gun so that I can instantly defeat a tough enemy.",
+          "status": "planned",
+          "priority": "P1",
+          "acceptance_criteria": [
+            {
+              "id": "AC-2.1.1",
+              "description": "Firing the God Gun costs exactly 1,000,000 coins, deducted from the player's balance at the moment of use",
+              "done": false,
+              "aaa": {
+                "arrange": "Player's coin balance is at least 1,000,000 and a valid enemy target is on screen",
+                "act": "Player selects the God Gun, targets an enemy, and confirms",
+                "assert": "Player's coin balance decreases by exactly 1,000,000"
+              }
+            },
+            {
+              "id": "AC-2.1.2",
+              "description": "Firing the God Gun instantly defeats the targeted enemy regardless of its remaining health",
+              "done": false,
+              "aaa": {
+                "arrange": "An enemy with full health (including a high-health enemy type) is targeted and player has sufficient coins",
+                "act": "Player fires the God Gun at that enemy",
+                "assert": "The targeted enemy is immediately removed/defeated in a single hit, independent of its health value"
+              }
+            },
+            {
+              "id": "AC-2.1.3",
+              "description": "The God Gun cannot be activated if the player has fewer than 1,000,000 coins",
+              "done": false,
+              "aaa": {
+                "arrange": "Player's coin balance is less than 1,000,000",
+                "act": "Player attempts to select/fire the God Gun",
+                "assert": "The God Gun option is disabled or the fire action is blocked, and no coins are deducted"
+              }
+            },
+            {
+              "id": "AC-2.1.4",
+              "description": "Player must confirm the purchase via an explicit confirmation prompt before the coins are spent, given the high cost",
+              "done": false,
+              "aaa": {
+                "arrange": "Player has sufficient coins and selects the God Gun to fire at a target",
+                "act": "Player triggers the fire action",
+                "assert": "A confirmation prompt displaying the 1,000,000 coin cost appears before any coins are deducted or damage is applied; canceling the prompt spends no coins and defeats no enemy"
+              }
+            },
+            {
+              "id": "AC-2.1.5",
+              "description": "The God Gun does not instantly defeat boss enemies (open design decision: bosses are explicitly excluded from the instant-defeat effect for balance reasons, per project policy god_gun.applies_to_bosses)",
+              "done": false,
+              "aaa": {
+                "arrange": "A boss-type enemy is on screen and player has sufficient coins",
+                "act": "Player attempts to target the boss with the God Gun",
+                "assert": "The God Gun is either not targetable at the boss or fires without instantly defeating it, and no coins are deducted if the action is blocked"
+              }
+            }
+          ],
+          "implementation": {
+            "files": [],
+            "notes": "Depends on core combat (US-1.1) and coin balance (US-1.3) already being implemented. Whether the God Gun excludes bosses is a product decision captured in project.policies.god_gun and should be revisited with design/playtesting before final lock.",
+            "state": "not_started",
+            "phase": null,
+            "evidence": "n/a",
+            "ac_done": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "epic-3",
+      "name": "PvP Multiplayer Arena",
+      "status": "deferred-post-revenue",
+      "description": "Real-time or asynchronous player-vs-player tank combat mode. Deferred until the core PvE wave-survival game has proven retention and revenue, since it introduces matchmaking, latency-sensitive netcode, and competitive balance considerations distinct from the wave-survival core loop.",
+      "user_stories": []
+    },
+    {
+      "id": "epic-4",
+      "name": "Clan & Social Features",
+      "status": "deferred-post-revenue",
+      "description": "Player clans/guilds, friends lists, and social features such as clan leaderboards and gifting, aimed at driving long-term retention and virality. Deferred post-revenue since it requires a mature player base and additional backend infrastructure (social graph, clan chat) beyond MVP scope.",
+      "user_stories": []
+    }
+  ]
+}
