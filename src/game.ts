@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { BootScene } from "./scenes/BootScene";
+import { GameScene } from "./scenes/GameScene";
 
 export function createGame(parent: HTMLElement): Phaser.Game {
   return new Phaser.Game({
@@ -16,6 +16,6 @@ export function createGame(parent: HTMLElement): Phaser.Game {
       default: "arcade",
       arcade: { debug: false },
     },
-    scene: [BootScene],
+    scene: [GameScene],
   });
 }
