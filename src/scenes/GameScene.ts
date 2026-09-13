@@ -59,6 +59,7 @@ const LEVEL_COLOR_SEQUENCE: RegularColor[] = ["red", "blue", "purple", "gold"];
 const KILLS_TO_ADVANCE = 5; // a boss level only ever needs 1 kill (itself)
 const CONCURRENT_ENEMIES_PER_LEVEL = 3;
 const SESSION_LENGTH = LEVEL_COLOR_SEQUENCE.length + 1; // one lap of red/blue/purple/gold/boss = one "session"
+const SESSION_ANNOUNCEMENT_DURATION_MS = 1000;
 const LEVEL_TRANSITION_DELAY_MS = 2000; // pause between a level clearing and the next one's enemies spawning in
 
 // Every level cleared makes newly-spawned regular-tier enemies a bit
@@ -369,6 +370,10 @@ export class GameScene extends Phaser.Scene {
     this.killsThisLevel = 0;
     this.levelText.setText(`Level: ${this.getLevelNumber()}`);
 
+    if (this.totalLevelsCleared % SESSION_LENGTH === 0) {
+      this.showSessionAnnouncement(this.getCurrentSessionNumber());
+    }
+
     const color = this.getCurrentLevelColor();
     if (color === "boss") {
       this.spawnBoss();
@@ -377,6 +382,23 @@ export class GameScene extends Phaser.Scene {
         this.spawnEnemy(color);
       }
     }
+  }
+
+  /** Banner shown for SESSION_ANNOUNCEMENT_DURATION_MS at the start of every session (including the first). */
+  private showSessionAnnouncement(sessionNumber: number): void {
+    const { width, height } = this.scale;
+    const banner = this.add
+      .text(width / 2, height / 2, `SESSION ${sessionNumber}`, {
+        fontFamily: "monospace",
+        fontSize: "40px",
+        color: "#ffeb3b",
+        align: "center",
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(20);
+
+    this.time.delayedCall(SESSION_ANNOUNCEMENT_DURATION_MS, () => banner.destroy());
   }
 
   private clearAllEnemies(): void {
