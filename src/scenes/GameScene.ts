@@ -19,41 +19,12 @@ const ENEMY_PROJECTILE_SPEED = 260;
 const ENEMY_PROJECTILE_DAMAGE_FALLBACK = 5;
 const ENEMY_PREFERRED_DISTANCE = 260; // holds roughly this far from the player to shoot from
 const ENEMY_DISTANCE_DEADZONE = 20;
-const ENEMY_RESPAWN_DELAY_MS = 1500;
+const ENEMY_RESPAWN_DELAY_MS = 1500; // delay before a replacement spawns in to keep the current wave topped up
 
 const PROJECTILE_LIFESPAN_MS = 1500;
 
-// Difficulty ramp: every DIFFICULTY_INTERVAL_MS of play, the difficulty
-// level goes up by 1. Newly-spawned enemies get progressively tougher
-// stats and the field skews toward harder colors, and the target enemy
-// count on the field also grows -- all applied only to *new* spawns, so
-// the game gets harder the farther in you get without retroactively
-// buffing tanks already on the field.
-const DIFFICULTY_INTERVAL_MS = 20000;
-const DIFFICULTY_HEALTH_SCALE_PER_LEVEL = 0.15;
-const DIFFICULTY_SPEED_SCALE_PER_LEVEL = 0.05;
-const DIFFICULTY_SPEED_SCALE_CAP = 1.6;
-const DIFFICULTY_FIRE_RATE_SCALE_PER_LEVEL = 0.05;
-const DIFFICULTY_FIRE_RATE_SCALE_FLOOR = 0.5;
-const DIFFICULTY_DAMAGE_PER_LEVEL = 0.4; // damage still hard-capped below PLAYER_PROJECTILE_DAMAGE, see getScaledTier
-const BASE_ENEMY_COUNT = 4;
-const MAX_ENEMY_COUNT = 8;
-const DIFFICULTY_LEVELS_PER_EXTRA_ENEMY = 3;
-const POPULATION_CHECK_INTERVAL_MS = 5000;
-
-// A boss spawns every BOSS_LEVEL_INTERVAL difficulty levels reached (5, 10,
-// 15, ...). Its stats are fixed, not run through the normal difficulty
-// scaling/damage-cap logic -- 20 damage intentionally exceeds the player's
-// own 10, unlike every regular tier.
-const BOSS_LEVEL_INTERVAL = 5;
-const BOSS_MAX_HEALTH = 200;
-const BOSS_DAMAGE = 20;
-const BOSS_SPEED = 90;
-const BOSS_FIRE_COOLDOWN_MS = 1000;
-const BOSS_SCALE = TANK_SCALE * 1.6;
-const BOSS_TINT = 0x1a1a1a;
-
 type EnemyColor = "red" | "purple" | "blue" | "gold" | "boss";
+type RegularColor = Exclude<EnemyColor, "boss">;
 
 interface EnemyTier {
   color: EnemyColor;
@@ -65,26 +36,42 @@ interface EnemyTier {
   fireCooldownMs: number;
 }
 
-// Red = 1 (easy), purple = 2 (medium), blue = 3 (harder), gold = 4 (hard):
-// health, damage, speed, and fire rate all scale up together with tier
-// number. Regular tiers keep damage below PLAYER_PROJECTILE_DAMAGE so the
+// Level order: red(1) -> blue(2) -> purple(3) -> gold(4) -> boss(5), then
+// repeats. Regular tiers keep damage below PLAYER_PROJECTILE_DAMAGE so the
 // player always out-damages them; the boss is the deliberate exception.
 const ENEMY_TIERS: Record<EnemyColor, EnemyTier> = {
   red: { color: "red", tint: 0xe53935, label: "1", maxHealth: 30, damage: 3, speed: 80, fireCooldownMs: 1500 },
-  purple: { color: "purple", tint: 0x9c27b0, label: "2", maxHealth: 60, damage: 5, speed: 95, fireCooldownMs: 1200 },
-  blue: { color: "blue", tint: 0x2196f3, label: "3", maxHealth: 100, damage: 7, speed: 110, fireCooldownMs: 950 },
+  blue: { color: "blue", tint: 0x2196f3, label: "2", maxHealth: 60, damage: 5, speed: 95, fireCooldownMs: 1200 },
+  purple: { color: "purple", tint: 0x9c27b0, label: "3", maxHealth: 100, damage: 7, speed: 110, fireCooldownMs: 950 },
   gold: { color: "gold", tint: 0xffc400, label: "4", maxHealth: 150, damage: 9, speed: 125, fireCooldownMs: 750 },
   boss: {
     color: "boss",
-    tint: BOSS_TINT,
+    tint: 0x1a1a1a,
     label: "BOSS",
-    maxHealth: BOSS_MAX_HEALTH,
-    damage: BOSS_DAMAGE,
-    speed: BOSS_SPEED,
-    fireCooldownMs: BOSS_FIRE_COOLDOWN_MS,
+    maxHealth: 200,
+    damage: 20, // intentionally exceeds PLAYER_PROJECTILE_DAMAGE, unlike every regular tier
+    speed: 90,
+    fireCooldownMs: 1000,
   },
 };
-const ENEMY_COLORS: Exclude<EnemyColor, "boss">[] = ["red", "purple", "blue", "gold"]; // bosses only spawn via spawnBoss()
+
+const LEVEL_COLOR_SEQUENCE: RegularColor[] = ["red", "blue", "purple", "gold"];
+const KILLS_TO_ADVANCE = 5; // a boss level only ever needs 1 kill (itself)
+const CONCURRENT_ENEMIES_PER_LEVEL = 3;
+const LEVEL_TRANSITION_DELAY_MS = 2000; // pause between a level clearing and the next one's enemies spawning in
+
+// Every level cleared makes newly-spawned regular-tier enemies a bit
+// tougher, applied only at spawn time (existing enemies aren't
+// retroactively buffed) -- so the game gets harder each time you loop
+// back around through red -> blue -> purple -> gold -> boss.
+const LEVEL_HEALTH_SCALE_PER_CLEAR = 0.15;
+const LEVEL_SPEED_SCALE_PER_CLEAR = 0.05;
+const LEVEL_SPEED_SCALE_CAP = 1.6;
+const LEVEL_FIRE_RATE_SCALE_PER_CLEAR = 0.05;
+const LEVEL_FIRE_RATE_SCALE_FLOOR = 0.5;
+const LEVEL_DAMAGE_PER_CLEAR = 0.4; // still hard-capped below PLAYER_PROJECTILE_DAMAGE, see getScaledTier
+
+const BOSS_SCALE = TANK_SCALE * 1.6;
 
 type EnemyHullSprite = Phaser.GameObjects.Image & { body: Phaser.Physics.Arcade.Body };
 
@@ -103,14 +90,14 @@ interface EnemyInstance {
  * release-to-fire) and desktop WASD + mouse (click to fire), since the PRD
  * targets both desktop and mobile web.
  *
- * Multiple enemy tanks are on the field at once, each with simple chase-and-
- * shoot AI and a color-coded difficulty tier (ENEMY_TIERS) -- not the real
- * wave spawner (US-1.2 will replace this with proper wave-based spawning).
- * Every tier deals less damage than the player by design. Defeating an
- * enemy destroys it and a new, randomly-tiered one respawns elsewhere after
- * a short delay, keeping the field populated since there's no wave/win-
- * condition system yet. The player has no game-over flow yet either, so it
- * simply respawns at full health when defeated.
+ * Enemies now come in sequential single-color waves, not the real wave
+ * spawner (US-1.2 will replace this with a proper system): level 1 spawns
+ * only red tanks, level 2 only blue, 3 purple, 4 gold, and level 5 spawns a
+ * single boss -- then it repeats from level 6 (red again, but tougher).
+ * Defeating KILLS_TO_ADVANCE tanks (or the boss, which only takes 1)
+ * clears the level; any stragglers of the old color are removed and the
+ * next level's wave spawns in after a short pause. The player has no
+ * game-over flow yet, so it simply respawns at full health when defeated.
  */
 export class GameScene extends Phaser.Scene {
   private tank!: Phaser.GameObjects.Image & { body: Phaser.Physics.Arcade.Body };
@@ -118,7 +105,7 @@ export class GameScene extends Phaser.Scene {
   private tankFacing: Vector2 = { x: 1, y: 0 }; // matches the hull/turret art's neutral "facing right" orientation
   private playerHealth = new Health(PLAYER_MAX_HEALTH);
   private playerHealthText!: Phaser.GameObjects.Text;
-  private difficultyText!: Phaser.GameObjects.Text;
+  private levelText!: Phaser.GameObjects.Text;
   private playerProjectiles!: Phaser.Physics.Arcade.Group;
 
   private enemies: EnemyInstance[] = [];
@@ -126,7 +113,8 @@ export class GameScene extends Phaser.Scene {
   private enemyTurretKey!: string;
   private enemyGroup!: Phaser.Physics.Arcade.Group;
   private enemyProjectiles!: Phaser.Physics.Arcade.Group;
-  private nextBossLevel = BOSS_LEVEL_INTERVAL;
+  private totalLevelsCleared = 0; // persists across cycles; drives stat scaling
+  private killsThisLevel = 0;
 
   private moveStick = new Joystick(JOYSTICK_RADIUS);
   private aimStick = new Joystick(JOYSTICK_RADIUS);
@@ -168,8 +156,8 @@ export class GameScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(2);
 
-    this.difficultyText = this.add
-      .text(16, 40, "Difficulty: 1", {
+    this.levelText = this.add
+      .text(16, 40, `Level: ${this.getLevelNumber()}`, {
         fontFamily: "monospace",
         fontSize: "16px",
         color: "#ffffff",
@@ -182,17 +170,10 @@ export class GameScene extends Phaser.Scene {
     this.enemyTurretKey = enemyTextures.turretKey;
 
     this.enemyGroup = this.physics.add.group();
-    for (const color of ENEMY_COLORS) {
-      this.spawnEnemy(color);
-    }
-    this.time.addEvent({
-      delay: POPULATION_CHECK_INTERVAL_MS,
-      loop: true,
-      callback: () => this.maintainEnemyPopulation(),
-    });
-
     this.playerProjectiles = this.physics.add.group();
     this.enemyProjectiles = this.physics.add.group();
+
+    this.startLevel();
 
     // Group-vs-Group overlap: Phaser preserves argument order here (unlike
     // the Group-vs-single-object case below, where the single object is
@@ -241,28 +222,54 @@ export class GameScene extends Phaser.Scene {
     this.updateTankVisuals();
     this.updateEnemyAI();
 
-    const displayedLevel = this.getDifficultyLevel() + 1;
-    this.difficultyText.setText(`Difficulty: ${displayedLevel}`);
-    if (displayedLevel >= this.nextBossLevel) {
-      this.spawnBoss();
-      this.nextBossLevel += BOSS_LEVEL_INTERVAL;
-    }
-
     if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
       this.fireAtEnemy();
     }
   }
 
-  private getDifficultyLevel(): number {
-    return Math.floor(this.time.now / DIFFICULTY_INTERVAL_MS);
+  private getLevelNumber(): number {
+    return this.totalLevelsCleared + 1;
   }
 
-  /** Scales a base tier's stats up by the current difficulty level, applied at spawn time only. */
-  private getScaledTier(baseTier: EnemyTier, level: number): EnemyTier {
-    const healthMultiplier = 1 + level * DIFFICULTY_HEALTH_SCALE_PER_LEVEL;
-    const speedMultiplier = Math.min(1 + level * DIFFICULTY_SPEED_SCALE_PER_LEVEL, DIFFICULTY_SPEED_SCALE_CAP);
-    const fireRateMultiplier = Math.max(1 - level * DIFFICULTY_FIRE_RATE_SCALE_PER_LEVEL, DIFFICULTY_FIRE_RATE_SCALE_FLOOR);
-    const damage = Math.min(baseTier.damage + level * DIFFICULTY_DAMAGE_PER_LEVEL, PLAYER_PROJECTILE_DAMAGE - 1);
+  private getCurrentLevelColor(): EnemyColor {
+    const position = this.totalLevelsCleared % (LEVEL_COLOR_SEQUENCE.length + 1); // +1 slot for the boss
+    return position === LEVEL_COLOR_SEQUENCE.length ? "boss" : LEVEL_COLOR_SEQUENCE[position];
+  }
+
+  private getKillsRequiredForCurrentLevel(): number {
+    return this.getCurrentLevelColor() === "boss" ? 1 : KILLS_TO_ADVANCE;
+  }
+
+  /** Spawns the current level's wave: a boss alone, or a batch of the level's color. */
+  private startLevel(): void {
+    this.killsThisLevel = 0;
+    this.levelText.setText(`Level: ${this.getLevelNumber()}`);
+
+    const color = this.getCurrentLevelColor();
+    if (color === "boss") {
+      this.spawnBoss();
+    } else {
+      for (let i = 0; i < CONCURRENT_ENEMIES_PER_LEVEL; i++) {
+        this.spawnEnemy(color);
+      }
+    }
+  }
+
+  private clearAllEnemies(): void {
+    for (const enemy of this.enemies) {
+      enemy.hull.destroy();
+      enemy.turret.destroy();
+      enemy.healthText.destroy();
+    }
+    this.enemies = [];
+  }
+
+  /** Scales a base tier's stats up by levels cleared so far, applied at spawn time only. */
+  private getScaledTier(baseTier: EnemyTier, levelsCleared: number): EnemyTier {
+    const healthMultiplier = 1 + levelsCleared * LEVEL_HEALTH_SCALE_PER_CLEAR;
+    const speedMultiplier = Math.min(1 + levelsCleared * LEVEL_SPEED_SCALE_PER_CLEAR, LEVEL_SPEED_SCALE_CAP);
+    const fireRateMultiplier = Math.max(1 - levelsCleared * LEVEL_FIRE_RATE_SCALE_PER_CLEAR, LEVEL_FIRE_RATE_SCALE_FLOOR);
+    const damage = Math.min(baseTier.damage + levelsCleared * LEVEL_DAMAGE_PER_CLEAR, PLAYER_PROJECTILE_DAMAGE - 1);
 
     return {
       ...baseTier,
@@ -271,38 +278,6 @@ export class GameScene extends Phaser.Scene {
       fireCooldownMs: Math.round(baseTier.fireCooldownMs * fireRateMultiplier),
       damage: Math.round(damage),
     };
-  }
-
-  /** Weighted random color: harder tiers become more likely to spawn as the difficulty level rises. */
-  private pickWeightedColor(level: number): EnemyColor {
-    const weights: Record<Exclude<EnemyColor, "boss">, number> = {
-      red: Math.max(1, 6 - level),
-      purple: 4,
-      blue: Math.max(0, level - 1),
-      gold: Math.max(0, level - 3),
-    };
-
-    const entries = ENEMY_COLORS.map((color) => [color, weights[color]] as const).filter(([, w]) => w > 0);
-    const total = entries.reduce((sum, [, w]) => sum + w, 0);
-    let roll = Math.random() * total;
-
-    for (const [color, w] of entries) {
-      if (roll < w) return color;
-      roll -= w;
-    }
-    return entries[entries.length - 1][0];
-  }
-
-  private getEnemyTargetCount(level: number): number {
-    return Math.min(BASE_ENEMY_COUNT + Math.floor(level / DIFFICULTY_LEVELS_PER_EXTRA_ENEMY), MAX_ENEMY_COUNT);
-  }
-
-  private maintainEnemyPopulation(): void {
-    const level = this.getDifficultyLevel();
-    const target = this.getEnemyTargetCount(level);
-    while (this.enemies.length < target) {
-      this.spawnEnemy(this.pickWeightedColor(level));
-    }
   }
 
   /** Spacebar: fire at most once per SPACE_FIRE_COOLDOWN_MS, auto-aimed at the nearest enemy. */
@@ -349,12 +324,12 @@ export class GameScene extends Phaser.Scene {
     this.turretSprite.rotation = Math.atan2(this.tankFacing.y, this.tankFacing.x);
   }
 
-  private spawnEnemy(color: EnemyColor): void {
-    const tier = this.getScaledTier(ENEMY_TIERS[color], this.getDifficultyLevel());
+  private spawnEnemy(color: RegularColor): void {
+    const tier = this.getScaledTier(ENEMY_TIERS[color], this.totalLevelsCleared);
     this.createEnemyInstance(tier, TANK_SCALE, 32, "#ffffff", "14px");
   }
 
-  /** Fixed stats, not scaled by difficulty level -- see BOSS_* constants. */
+  /** Fixed stats, not scaled by levels cleared -- see ENEMY_TIERS.boss. */
   private spawnBoss(): void {
     this.createEnemyInstance(ENEMY_TIERS.boss, BOSS_SCALE, 40, "#ff5252", "18px");
   }
@@ -528,14 +503,27 @@ export class GameScene extends Phaser.Scene {
 
     instance.health.takeDamage(damage);
     instance.healthText.setText(`${instance.tier.label} ${instance.health.value}`);
+    if (!instance.health.isDead) return;
 
-    if (instance.health.isDead) {
-      this.enemies.splice(index, 1);
-      instance.hull.destroy();
-      instance.turret.destroy();
-      instance.healthText.destroy();
-      this.time.delayedCall(ENEMY_RESPAWN_DELAY_MS, () => this.spawnEnemy(this.pickWeightedColor(this.getDifficultyLevel())));
+    this.enemies.splice(index, 1);
+    instance.hull.destroy();
+    instance.turret.destroy();
+    instance.healthText.destroy();
+
+    this.killsThisLevel += 1;
+    if (this.killsThisLevel < this.getKillsRequiredForCurrentLevel()) {
+      // Keep the current wave topped up until the level's kill quota is reached.
+      const color = this.getCurrentLevelColor();
+      if (color !== "boss") {
+        this.time.delayedCall(ENEMY_RESPAWN_DELAY_MS, () => this.spawnEnemy(color));
+      }
+      return;
     }
+
+    // Level cleared: drop any stragglers of the old color and move on.
+    this.totalLevelsCleared += 1;
+    this.clearAllEnemies();
+    this.time.delayedCall(LEVEL_TRANSITION_DELAY_MS, () => this.startLevel());
   }
 
   private handlePlayerHit(projectile: Phaser.GameObjects.Arc): void {
