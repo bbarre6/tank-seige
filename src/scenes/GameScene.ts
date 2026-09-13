@@ -2,7 +2,7 @@ import Phaser from "phaser";
 import { Joystick, type Vector2 } from "../gameplay/input/Joystick";
 import { spawnProjectile } from "../gameplay/combat/Projectile";
 import { Health } from "../gameplay/combat/Health";
-import { ensureTankTextures } from "../gameplay/render/TankTextures";
+import { ensureTankTextures, ensureEnemyTankTextures } from "../gameplay/render/TankTextures";
 
 const TANK_SPEED = 220; // px/s
 const TANK_SCALE = 1.5;
@@ -48,7 +48,10 @@ export class GameScene extends Phaser.Scene {
   private playerHealthText!: Phaser.GameObjects.Text;
   private playerProjectiles!: Phaser.Physics.Arcade.Group;
 
-  private enemy!: Phaser.GameObjects.Rectangle & { body: Phaser.Physics.Arcade.Body };
+  private enemy!: Phaser.GameObjects.Image & { body: Phaser.Physics.Arcade.Body };
+  private enemyTurretSprite!: Phaser.GameObjects.Image;
+  private enemyHullKey!: string;
+  private enemyTurretKey!: string;
   private enemyGroup!: Phaser.Physics.Arcade.Group;
   private enemyHealth = new Health(ENEMY_MAX_HEALTH);
   private enemyHealthText!: Phaser.GameObjects.Text;
@@ -90,6 +93,10 @@ export class GameScene extends Phaser.Scene {
         color: "#ffffff",
       })
       .setScrollFactor(0);
+
+    const enemyTextures = ensureEnemyTankTextures(this);
+    this.enemyHullKey = enemyTextures.hullKey;
+    this.enemyTurretKey = enemyTextures.turretKey;
 
     this.enemyGroup = this.physics.add.group();
     this.spawnEnemy();
@@ -183,10 +190,13 @@ export class GameScene extends Phaser.Scene {
     const x = Phaser.Math.Between(width * 0.6, width * 0.9);
     const y = Phaser.Math.Between(height * 0.15, height * 0.6);
 
-    this.enemy = this.add.rectangle(x, y, 40, 40, 0xe53935) as typeof this.enemy;
+    this.enemy = this.add.image(x, y, this.enemyHullKey).setScale(TANK_SCALE) as typeof this.enemy;
     this.physics.add.existing(this.enemy);
     this.enemy.body.setCollideWorldBounds(true);
+    this.enemy.setDepth(0);
     this.enemyGroup.add(this.enemy);
+
+    this.enemyTurretSprite = this.add.image(x, y, this.enemyTurretKey).setScale(TANK_SCALE).setDepth(1);
 
     this.enemyHealth.reset();
     this.enemyHealthText = this.add
@@ -212,11 +222,17 @@ export class GameScene extends Phaser.Scene {
 
     if (distance > ENEMY_PREFERRED_DISTANCE + ENEMY_DISTANCE_DEADZONE) {
       this.enemy.body.setVelocity(toPlayer.x * ENEMY_SPEED, toPlayer.y * ENEMY_SPEED);
+      this.enemy.rotation = Math.atan2(toPlayer.y, toPlayer.x);
     } else if (distance < ENEMY_PREFERRED_DISTANCE - ENEMY_DISTANCE_DEADZONE) {
       this.enemy.body.setVelocity(-toPlayer.x * ENEMY_SPEED, -toPlayer.y * ENEMY_SPEED);
+      this.enemy.rotation = Math.atan2(-toPlayer.y, -toPlayer.x);
     } else {
       this.enemy.body.setVelocity(0, 0);
     }
+
+    // Turret always tracks the player, independent of hull facing.
+    this.enemyTurretSprite.setPosition(this.enemy.x, this.enemy.y);
+    this.enemyTurretSprite.rotation = Math.atan2(toPlayer.y, toPlayer.x);
 
     this.enemyHealthText.setPosition(this.enemy.x, this.enemy.y - 32);
 
@@ -332,6 +348,7 @@ export class GameScene extends Phaser.Scene {
     if (this.enemyHealth.isDead) {
       this.enemyAlive = false;
       this.enemy.destroy();
+      this.enemyTurretSprite.destroy();
       this.enemyHealthText.destroy();
       this.time.delayedCall(ENEMY_RESPAWN_DELAY_MS, () => this.spawnEnemy());
     }
