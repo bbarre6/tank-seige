@@ -12,6 +12,7 @@ const PLAYER_MAX_HEALTH = 100;
 const PLAYER_PROJECTILE_SPEED = 520;
 const PLAYER_PROJECTILE_DAMAGE = 10;
 const PLAYER_FIRE_COOLDOWN_MS = 200;
+const SPACE_FIRE_COOLDOWN_MS = 500; // separate, slower cap on the spacebar auto-fire shortcut
 
 const ENEMY_MAX_HEALTH = 80;
 const ENEMY_SPEED = 90; // slower than the player so it's chaseable, not oppressive
@@ -65,6 +66,7 @@ export class GameScene extends Phaser.Scene {
   private wasd!: { w: Phaser.Input.Keyboard.Key; a: Phaser.Input.Keyboard.Key; s: Phaser.Input.Keyboard.Key; d: Phaser.Input.Keyboard.Key };
   private spaceKey!: Phaser.Input.Keyboard.Key;
   private lastFiredAt = 0;
+  private lastSpaceFiredAt = 0;
 
   constructor() {
     super("GameScene");
@@ -117,7 +119,19 @@ export class GameScene extends Phaser.Scene {
 
     this.setupTouchControls(width);
 
-    // Desktop: click anywhere to fire toward the pointer.
+    // Desktop: mouse aim only updates on actual mouse movement (not polled
+    // every frame), so it doesn't stomp a spacebar auto-aim shot the very
+    // next frame. Click anywhere to fire toward the pointer.
+    this.input.on("pointermove", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.wasTouch || this.aimTouchPointerId !== null) return;
+
+      const dx = pointer.worldX - this.tank.x;
+      const dy = pointer.worldY - this.tank.y;
+      const distance = Math.hypot(dx, dy);
+      if (distance > 0) {
+        this.tankFacing = { x: dx / distance, y: dy / distance };
+      }
+    });
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       if (pointer.x < width / 2 || !this.isDesktopPointer(pointer)) return;
       this.fireToward({ x: pointer.worldX, y: pointer.worldY });
@@ -127,7 +141,6 @@ export class GameScene extends Phaser.Scene {
   update(_time: number, delta: number): void {
     this.updateMoveVector();
     this.applyMovement(delta);
-    this.updateDesktopAim();
     this.updateTankVisuals();
     this.updateEnemyAI();
 
@@ -136,9 +149,12 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  /** Spacebar: fire once per press, auto-aimed at the current enemy. */
+  /** Spacebar: fire at most once per SPACE_FIRE_COOLDOWN_MS, auto-aimed at the current enemy. */
   private fireAtEnemy(): void {
     if (!this.enemyAlive) return;
+
+    const now = this.time.now;
+    if (now - this.lastSpaceFiredAt < SPACE_FIRE_COOLDOWN_MS) return;
 
     const target = { x: this.enemy.x, y: this.enemy.y };
     const dx = target.x - this.tank.x;
@@ -146,6 +162,7 @@ export class GameScene extends Phaser.Scene {
     const distance = Math.hypot(dx, dy);
     if (distance === 0) return;
 
+    this.lastSpaceFiredAt = now;
     this.tankFacing = { x: dx / distance, y: dy / distance };
     this.fireToward(target);
   }
@@ -275,20 +292,6 @@ export class GameScene extends Phaser.Scene {
 
   private applyMovement(_delta: number): void {
     this.tank.body.setVelocity(this.moveVector.x * TANK_SPEED, this.moveVector.y * TANK_SPEED);
-  }
-
-  private updateDesktopAim(): void {
-    if (this.aimTouchPointerId !== null) return; // touch drives aim directly
-
-    const pointer = this.input.activePointer;
-    if (pointer.wasTouch) return;
-
-    const dx = pointer.worldX - this.tank.x;
-    const dy = pointer.worldY - this.tank.y;
-    const distance = Math.hypot(dx, dy);
-    if (distance > 0) {
-      this.tankFacing = { x: dx / distance, y: dy / distance };
-    }
   }
 
   private fireToward(worldPoint: Vector2 | null, direction?: Vector2): void {
