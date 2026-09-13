@@ -48,8 +48,8 @@ const ENEMY_TIERS: Record<EnemyColor, EnemyTier> = {
     color: "boss",
     tint: 0x1a1a1a,
     label: "BOSS",
-    maxHealth: 200,
-    damage: 20, // intentionally exceeds PLAYER_PROJECTILE_DAMAGE, unlike every regular tier
+    maxHealth: 500,
+    damage: 50, // intentionally exceeds PLAYER_PROJECTILE_DAMAGE, unlike every regular tier
     speed: 90,
     fireCooldownMs: 1000,
   },
@@ -125,8 +125,13 @@ export class GameScene extends Phaser.Scene {
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: { w: Phaser.Input.Keyboard.Key; a: Phaser.Input.Keyboard.Key; s: Phaser.Input.Keyboard.Key; d: Phaser.Input.Keyboard.Key };
   private spaceKey!: Phaser.Input.Keyboard.Key;
+  private pauseKey!: Phaser.Input.Keyboard.Key;
   private lastFiredAt = 0;
   private lastSpaceFiredAt = 0;
+
+  private isPaused = false;
+  private pauseOverlay!: Phaser.GameObjects.Rectangle;
+  private pauseText!: Phaser.GameObjects.Text;
 
   constructor() {
     super("GameScene");
@@ -194,6 +199,25 @@ export class GameScene extends Phaser.Scene {
       d: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.D),
     };
     this.spaceKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+    this.pauseKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.P);
+
+    this.pauseOverlay = this.add
+      .rectangle(0, 0, width, height, 0x000000, 0.6)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(10)
+      .setVisible(false);
+    this.pauseText = this.add
+      .text(width / 2, height / 2, "PAUSED\n\nPress P to resume", {
+        fontFamily: "monospace",
+        fontSize: "28px",
+        color: "#ffffff",
+        align: "center",
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(11)
+      .setVisible(false);
 
     this.setupTouchControls(width);
 
@@ -217,6 +241,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number): void {
+    if (Phaser.Input.Keyboard.JustDown(this.pauseKey)) {
+      this.togglePause();
+    }
+    if (this.isPaused) return;
+
     this.updateMoveVector();
     this.applyMovement(delta);
     this.updateTankVisuals();
@@ -225,6 +254,21 @@ export class GameScene extends Phaser.Scene {
     if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
       this.fireAtEnemy();
     }
+  }
+
+  private togglePause(): void {
+    this.isPaused = !this.isPaused;
+
+    if (this.isPaused) {
+      this.physics.pause();
+      this.time.paused = true;
+    } else {
+      this.physics.resume();
+      this.time.paused = false;
+    }
+
+    this.pauseOverlay.setVisible(this.isPaused);
+    this.pauseText.setVisible(this.isPaused);
   }
 
   private getLevelNumber(): number {
@@ -466,6 +510,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   private fireToward(worldPoint: Vector2 | null, direction?: Vector2): void {
+    if (this.isPaused) return; // touch/mouse fire are event-driven, not gated by update()'s early return
+
     const now = this.time.now;
     if (now - this.lastFiredAt < PLAYER_FIRE_COOLDOWN_MS) return;
 
