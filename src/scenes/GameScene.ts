@@ -13,7 +13,7 @@ const PLAYER_PROJECTILE_SPEED = 520;
 const PLAYER_PROJECTILE_DAMAGE = 10;
 const PLAYER_FIRE_COOLDOWN_MS = 200;
 
-const ENEMY_MAX_HEALTH = 30;
+const ENEMY_MAX_HEALTH = 80;
 const ENEMY_SPEED = 90; // slower than the player so it's chaseable, not oppressive
 const ENEMY_PROJECTILE_SPEED = 260;
 const ENEMY_PROJECTILE_DAMAGE = 5; // half the player's damage, per design: player should out-damage enemies
@@ -94,7 +94,11 @@ export class GameScene extends Phaser.Scene {
     this.playerProjectiles = this.physics.add.group();
     this.enemyProjectiles = this.physics.add.group();
 
-    this.physics.add.overlap(this.playerProjectiles, this.enemyGroup, (_enemy, projectile) => {
+    // Group-vs-Group overlap: Phaser preserves argument order here (unlike
+    // the Group-vs-single-object case below, where the single object is
+    // always reordered to come first), so the playerProjectiles member is
+    // the first callback argument and the enemyGroup member is the second.
+    this.physics.add.overlap(this.playerProjectiles, this.enemyGroup, (projectile, _enemy) => {
       this.handleEnemyHit(projectile as Phaser.GameObjects.Arc);
     });
     this.physics.add.overlap(this.enemyProjectiles, this.tank, (_tank, projectile) => {
