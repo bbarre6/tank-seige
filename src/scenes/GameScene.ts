@@ -58,6 +58,7 @@ const ENEMY_TIERS: Record<EnemyColor, EnemyTier> = {
 const LEVEL_COLOR_SEQUENCE: RegularColor[] = ["red", "blue", "purple", "gold"];
 const KILLS_TO_ADVANCE = 5; // a boss level only ever needs 1 kill (itself)
 const CONCURRENT_ENEMIES_PER_LEVEL = 3;
+const SESSION_LENGTH = LEVEL_COLOR_SEQUENCE.length + 1; // one lap of red/blue/purple/gold/boss = one "session"
 const LEVEL_TRANSITION_DELAY_MS = 2000; // pause between a level clearing and the next one's enemies spawning in
 
 // Every level cleared makes newly-spawned regular-tier enemies a bit
@@ -131,7 +132,8 @@ export class GameScene extends Phaser.Scene {
 
   private isPaused = false;
   private pauseOverlay!: Phaser.GameObjects.Rectangle;
-  private pauseText!: Phaser.GameObjects.Text;
+  private pauseMenuContainer!: Phaser.GameObjects.Container;
+  private sessionsMenuContainer!: Phaser.GameObjects.Container;
 
   constructor() {
     super("GameScene");
@@ -207,17 +209,14 @@ export class GameScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(10)
       .setVisible(false);
-    this.pauseText = this.add
-      .text(width / 2, height / 2, "PAUSED\n\nPress P to resume", {
-        fontFamily: "monospace",
-        fontSize: "28px",
-        color: "#ffffff",
-        align: "center",
-      })
-      .setOrigin(0.5)
-      .setScrollFactor(0)
-      .setDepth(11)
-      .setVisible(false);
+
+    this.pauseMenuContainer = this.add.container(width / 2, height / 2).setScrollFactor(0).setDepth(11).setVisible(false);
+    const pauseTitle = this.add.text(0, -80, "PAUSED", { fontFamily: "monospace", fontSize: "32px", color: "#ffffff" }).setOrigin(0.5);
+    const resumeButton = this.createMenuButton(0, -10, "Resume", () => this.togglePause());
+    const sessionsButton = this.createMenuButton(0, 40, "Sessions", () => this.showSessionsView());
+    this.pauseMenuContainer.add([pauseTitle, resumeButton.bg, resumeButton.text, sessionsButton.bg, sessionsButton.text]);
+
+    this.sessionsMenuContainer = this.add.container(width / 2, height / 2).setScrollFactor(0).setDepth(11).setVisible(false);
 
     this.setupTouchControls(width);
 
@@ -262,13 +261,84 @@ export class GameScene extends Phaser.Scene {
     if (this.isPaused) {
       this.physics.pause();
       this.time.paused = true;
+      this.pauseMenuContainer.setVisible(true);
     } else {
       this.physics.resume();
       this.time.paused = false;
+      this.pauseMenuContainer.setVisible(false);
     }
 
     this.pauseOverlay.setVisible(this.isPaused);
-    this.pauseText.setVisible(this.isPaused);
+    this.sessionsMenuContainer.setVisible(false); // always land back on the main pause view
+  }
+
+  private createMenuButton(x: number, y: number, label: string, onClick: () => void): { bg: Phaser.GameObjects.Rectangle; text: Phaser.GameObjects.Text } {
+    const text = this.add.text(x, y, label, { fontFamily: "monospace", fontSize: "20px", color: "#ffffff" }).setOrigin(0.5);
+    const bg = this.add.rectangle(x, y, text.width + 32, text.height + 16, 0x2e7d32).setStrokeStyle(2, 0xffffff);
+    bg.setInteractive({ useHandCursor: true });
+    bg.on("pointerover", () => bg.setFillStyle(0x388e3c));
+    bg.on("pointerout", () => bg.setFillStyle(0x2e7d32));
+    bg.on("pointerdown", onClick);
+    return { bg, text };
+  }
+
+  private showSessionsView(): void {
+    this.pauseMenuContainer.setVisible(false);
+    this.rebuildSessionsView();
+    this.sessionsMenuContainer.setVisible(true);
+  }
+
+  /** Rebuilt each time it's opened, since session progress changes as you play. */
+  private rebuildSessionsView(): void {
+    this.sessionsMenuContainer.removeAll(true);
+
+    const completed = this.getCompletedSessionCount();
+    const current = this.getCurrentSessionNumber();
+    const windowSize = 6;
+    const start = Math.max(1, current - 2);
+    const end = start + windowSize - 1;
+    const rowHeight = 30;
+
+    const elements: Phaser.GameObjects.GameObject[] = [];
+    elements.push(this.add.text(0, -150, "SESSIONS", { fontFamily: "monospace", fontSize: "26px", color: "#ffffff" }).setOrigin(0.5));
+
+    let y = -100;
+    if (start > 1) {
+      elements.push(this.add.text(0, y, "...", { fontFamily: "monospace", fontSize: "16px", color: "#9e9e9e" }).setOrigin(0.5));
+      y += rowHeight;
+    }
+
+    for (let session = start; session <= end; session++) {
+      const status = session <= completed ? "Done" : session === current ? "In Progress" : "Not Done";
+      const color = session <= completed ? "#8bc34a" : session === current ? "#ffeb3b" : "#9e9e9e";
+      const marker = session <= completed ? "✓" : session === current ? "▶" : "•";
+      elements.push(
+        this.add
+          .text(0, y, `${marker}  Session ${session}  —  ${status}`, { fontFamily: "monospace", fontSize: "16px", color })
+          .setOrigin(0.5)
+      );
+      y += rowHeight;
+    }
+
+    elements.push(this.add.text(0, y, "...", { fontFamily: "monospace", fontSize: "16px", color: "#9e9e9e" }).setOrigin(0.5));
+    y += rowHeight + 20;
+
+    const back = this.createMenuButton(0, y, "Back", () => {
+      this.sessionsMenuContainer.setVisible(false);
+      this.pauseMenuContainer.setVisible(true);
+    });
+    elements.push(back.bg, back.text);
+
+    this.sessionsMenuContainer.add(elements);
+  }
+
+  /** A "session" is one lap of SESSION_LENGTH levels (red -> blue -> purple -> gold -> boss). */
+  private getCompletedSessionCount(): number {
+    return Math.floor(this.totalLevelsCleared / SESSION_LENGTH);
+  }
+
+  private getCurrentSessionNumber(): number {
+    return this.getCompletedSessionCount() + 1;
   }
 
   private getLevelNumber(): number {
