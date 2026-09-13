@@ -20,6 +20,7 @@ const ENEMY_PROJECTILE_DAMAGE = 5; // half the player's damage, per design: play
 const ENEMY_FIRE_COOLDOWN_MS = 1200;
 const ENEMY_PREFERRED_DISTANCE = 260; // holds roughly this far from the player to shoot from
 const ENEMY_DISTANCE_DEADZONE = 20;
+const ENEMY_RESPAWN_DELAY_MS = 1500;
 
 const PROJECTILE_LIFESPAN_MS = 1500;
 
@@ -32,9 +33,11 @@ const PROJECTILE_LIFESPAN_MS = 1500;
  * The enemy tank here is a single hand-placed stand-in with simple chase-and-
  * shoot AI, not the real wave spawner (US-1.2 will replace this with proper
  * wave-based enemy spawning). It deals less damage than the player (design
- * intent: the player should out-damage enemies) and there's no game-over
- * flow yet, so both the player and the enemy simply respawn at full health
- * when defeated.
+ * intent: the player should out-damage enemies). Defeating it destroys it
+ * and a fresh one respawns elsewhere after a short delay, since there's no
+ * wave/win-condition system yet to give a permanent kill somewhere to go.
+ * The player has no game-over flow yet either, so it simply respawns at
+ * full health when defeated.
  */
 export class GameScene extends Phaser.Scene {
   private tank!: Phaser.GameObjects.Image & { body: Phaser.Physics.Arcade.Body };
@@ -45,9 +48,11 @@ export class GameScene extends Phaser.Scene {
   private playerProjectiles!: Phaser.Physics.Arcade.Group;
 
   private enemy!: Phaser.GameObjects.Rectangle & { body: Phaser.Physics.Arcade.Body };
+  private enemyGroup!: Phaser.Physics.Arcade.Group;
   private enemyHealth = new Health(ENEMY_MAX_HEALTH);
   private enemyHealthText!: Phaser.GameObjects.Text;
   private enemyProjectiles!: Phaser.Physics.Arcade.Group;
+  private enemyAlive = false;
   private enemyLastFiredAt = 0;
 
   private moveStick = new Joystick(JOYSTICK_RADIUS);
@@ -83,22 +88,13 @@ export class GameScene extends Phaser.Scene {
       })
       .setScrollFactor(0);
 
-    this.enemy = this.add.rectangle(width * 0.8, height * 0.3, 40, 40, 0xe53935) as typeof this.enemy;
-    this.physics.add.existing(this.enemy);
-    this.enemy.body.setCollideWorldBounds(true);
-
-    this.enemyHealthText = this.add
-      .text(this.enemy.x, this.enemy.y - 32, `${this.enemyHealth.value}`, {
-        fontFamily: "monospace",
-        fontSize: "16px",
-        color: "#ffffff",
-      })
-      .setOrigin(0.5);
+    this.enemyGroup = this.physics.add.group();
+    this.spawnEnemy();
 
     this.playerProjectiles = this.physics.add.group();
     this.enemyProjectiles = this.physics.add.group();
 
-    this.physics.add.overlap(this.playerProjectiles, this.enemy, (_enemy, projectile) => {
+    this.physics.add.overlap(this.playerProjectiles, this.enemyGroup, (_enemy, projectile) => {
       this.handleEnemyHit(projectile as Phaser.GameObjects.Arc);
     });
     this.physics.add.overlap(this.enemyProjectiles, this.tank, (_tank, projectile) => {
@@ -141,7 +137,31 @@ export class GameScene extends Phaser.Scene {
     this.turretSprite.rotation = Math.atan2(this.tankFacing.y, this.tankFacing.x);
   }
 
+  private spawnEnemy(): void {
+    const { width, height } = this.scale;
+    const x = Phaser.Math.Between(width * 0.6, width * 0.9);
+    const y = Phaser.Math.Between(height * 0.15, height * 0.6);
+
+    this.enemy = this.add.rectangle(x, y, 40, 40, 0xe53935) as typeof this.enemy;
+    this.physics.add.existing(this.enemy);
+    this.enemy.body.setCollideWorldBounds(true);
+    this.enemyGroup.add(this.enemy);
+
+    this.enemyHealth.reset();
+    this.enemyHealthText = this.add
+      .text(this.enemy.x, this.enemy.y - 32, `${this.enemyHealth.value}`, {
+        fontFamily: "monospace",
+        fontSize: "16px",
+        color: "#ffffff",
+      })
+      .setOrigin(0.5);
+
+    this.enemyAlive = true;
+  }
+
   private updateEnemyAI(): void {
+    if (!this.enemyAlive) return;
+
     const dx = this.tank.x - this.enemy.x;
     const dy = this.tank.y - this.enemy.y;
     const distance = Math.hypot(dx, dy);
@@ -274,6 +294,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   private handleEnemyHit(projectile: Phaser.GameObjects.Arc): void {
+    if (!this.enemyAlive) return;
+
     const damage = (projectile as unknown as { damage: number }).damage ?? PLAYER_PROJECTILE_DAMAGE;
     projectile.destroy();
 
@@ -281,8 +303,10 @@ export class GameScene extends Phaser.Scene {
     this.enemyHealthText.setText(`${this.enemyHealth.value}`);
 
     if (this.enemyHealth.isDead) {
-      this.enemyHealth.reset();
-      this.enemyHealthText.setText(`${this.enemyHealth.value}`);
+      this.enemyAlive = false;
+      this.enemy.destroy();
+      this.enemyHealthText.destroy();
+      this.time.delayedCall(ENEMY_RESPAWN_DELAY_MS, () => this.spawnEnemy());
     }
   }
 
