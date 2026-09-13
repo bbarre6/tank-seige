@@ -131,6 +131,8 @@ export class GameScene extends Phaser.Scene {
   private lastSpaceFiredAt = 0;
 
   private isPaused = false;
+  private pauseButtonBg!: Phaser.GameObjects.Rectangle;
+  private pauseButtonText!: Phaser.GameObjects.Text;
   private pauseOverlay!: Phaser.GameObjects.Rectangle;
   private pauseMenuContainer!: Phaser.GameObjects.Container;
   private sessionsMenuContainer!: Phaser.GameObjects.Container;
@@ -218,6 +220,12 @@ export class GameScene extends Phaser.Scene {
 
     this.sessionsMenuContainer = this.add.container(width / 2, height / 2).setScrollFactor(0).setDepth(11).setVisible(false);
 
+    // Always-visible on-screen button to open the pause menu -- P is the
+    // desktop shortcut, but touch/mobile players have no keyboard at all.
+    const pauseButton = this.createMenuButton(width - 60, 30, "Pause", () => this.togglePause());
+    this.pauseButtonBg = pauseButton.bg.setScrollFactor(0).setDepth(2);
+    this.pauseButtonText = pauseButton.text.setScrollFactor(0).setDepth(2);
+
     this.setupTouchControls(width);
 
     // Desktop: mouse aim only updates on actual mouse movement (not polled
@@ -270,6 +278,8 @@ export class GameScene extends Phaser.Scene {
 
     this.pauseOverlay.setVisible(this.isPaused);
     this.sessionsMenuContainer.setVisible(false); // always land back on the main pause view
+    this.pauseButtonBg.setVisible(!this.isPaused);
+    this.pauseButtonText.setVisible(!this.isPaused);
   }
 
   private createMenuButton(x: number, y: number, label: string, onClick: () => void): { bg: Phaser.GameObjects.Rectangle; text: Phaser.GameObjects.Text } {
