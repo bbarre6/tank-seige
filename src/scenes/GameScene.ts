@@ -63,6 +63,7 @@ export class GameScene extends Phaser.Scene {
 
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: { w: Phaser.Input.Keyboard.Key; a: Phaser.Input.Keyboard.Key; s: Phaser.Input.Keyboard.Key; d: Phaser.Input.Keyboard.Key };
+  private spaceKey!: Phaser.Input.Keyboard.Key;
   private lastFiredAt = 0;
 
   constructor() {
@@ -112,6 +113,7 @@ export class GameScene extends Phaser.Scene {
       s: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.S),
       d: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.D),
     };
+    this.spaceKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
 
     this.setupTouchControls(width);
 
@@ -128,6 +130,24 @@ export class GameScene extends Phaser.Scene {
     this.updateDesktopAim();
     this.updateTankVisuals();
     this.updateEnemyAI();
+
+    if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
+      this.fireAtEnemy();
+    }
+  }
+
+  /** Spacebar: fire once per press, auto-aimed at the current enemy. */
+  private fireAtEnemy(): void {
+    if (!this.enemyAlive) return;
+
+    const target = { x: this.enemy.x, y: this.enemy.y };
+    const dx = target.x - this.tank.x;
+    const dy = target.y - this.tank.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance === 0) return;
+
+    this.tankFacing = { x: dx / distance, y: dy / distance };
+    this.fireToward(target);
   }
 
   private updateTankVisuals(): void {
