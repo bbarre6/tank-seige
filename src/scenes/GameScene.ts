@@ -2,9 +2,10 @@ import Phaser from "phaser";
 import { Joystick, type Vector2 } from "../gameplay/input/Joystick";
 import { spawnProjectile } from "../gameplay/combat/Projectile";
 import { Health } from "../gameplay/combat/Health";
+import { ensureTankTextures } from "../gameplay/render/TankTextures";
 
 const TANK_SPEED = 220; // px/s
-const TANK_SIZE = 36;
+const TANK_SCALE = 1.5;
 const JOYSTICK_RADIUS = 60;
 const PROJECTILE_SPEED = 520;
 const PROJECTILE_DAMAGE = 10;
@@ -23,8 +24,9 @@ const TARGET_MAX_HEALTH = 30;
  * (wave spawning) replaces it with actual enemy tanks.
  */
 export class GameScene extends Phaser.Scene {
-  private tank!: Phaser.GameObjects.Rectangle & { body: Phaser.Physics.Arcade.Body };
-  private tankFacing: Vector2 = { x: 0, y: -1 };
+  private tank!: Phaser.GameObjects.Image & { body: Phaser.Physics.Arcade.Body };
+  private turretSprite!: Phaser.GameObjects.Image;
+  private tankFacing: Vector2 = { x: 1, y: 0 }; // matches the hull/turret art's neutral "facing right" orientation
   private projectiles!: Phaser.Physics.Arcade.Group;
   private target!: Phaser.GameObjects.Rectangle & { body: Phaser.Physics.Arcade.Body };
   private targetHealth = new Health(TARGET_MAX_HEALTH);
@@ -46,10 +48,14 @@ export class GameScene extends Phaser.Scene {
 
   create(): void {
     const { width, height } = this.scale;
+    const { hullKey, turretKey } = ensureTankTextures(this);
 
-    this.tank = this.add.rectangle(width / 2, height / 2, TANK_SIZE, TANK_SIZE, 0x4caf50) as typeof this.tank;
+    this.tank = this.add.image(width / 2, height / 2, hullKey).setScale(TANK_SCALE) as typeof this.tank;
     this.physics.add.existing(this.tank);
     this.tank.body.setCollideWorldBounds(true);
+    this.tank.setDepth(0);
+
+    this.turretSprite = this.add.image(this.tank.x, this.tank.y, turretKey).setScale(TANK_SCALE).setDepth(1);
 
     this.target = this.add.rectangle(width * 0.8, height * 0.3, 40, 40, 0xe53935) as typeof this.target;
     this.physics.add.existing(this.target, true);
@@ -86,6 +92,18 @@ export class GameScene extends Phaser.Scene {
     this.updateMoveVector();
     this.applyMovement(delta);
     this.updateDesktopAim();
+    this.updateTankVisuals();
+  }
+
+  private updateTankVisuals(): void {
+    // Hull faces the direction of travel; holds its last heading while idle.
+    if (this.moveVector.x !== 0 || this.moveVector.y !== 0) {
+      this.tank.rotation = Math.atan2(this.moveVector.y, this.moveVector.x);
+    }
+
+    // Turret aims independently of the hull (AC-1.1.2).
+    this.turretSprite.setPosition(this.tank.x, this.tank.y);
+    this.turretSprite.rotation = Math.atan2(this.tankFacing.y, this.tankFacing.x);
   }
 
   private setupTouchControls(width: number): void {
