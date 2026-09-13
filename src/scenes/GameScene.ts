@@ -12,7 +12,7 @@ const PLAYER_MAX_HEALTH = 100;
 const PLAYER_PROJECTILE_SPEED = 520;
 const PLAYER_PROJECTILE_DAMAGE = 10;
 const PLAYER_FIRE_COOLDOWN_MS = 200;
-const SPACE_FIRE_COOLDOWN_MS = 500; // separate, slower cap on the spacebar auto-fire shortcut
+const SPACE_FIRE_COOLDOWN_MS = 300; // separate cap on the spacebar auto-fire shortcut
 
 const ENEMY_MAX_HEALTH = 80;
 const ENEMY_SPEED = 90; // slower than the player so it's chaseable, not oppressive
