@@ -41,27 +41,50 @@ const MAX_ENEMY_COUNT = 8;
 const DIFFICULTY_LEVELS_PER_EXTRA_ENEMY = 3;
 const POPULATION_CHECK_INTERVAL_MS = 5000;
 
-type EnemyColor = "red" | "purple" | "blue" | "gold";
+// A boss spawns every BOSS_LEVEL_INTERVAL difficulty levels reached (5, 10,
+// 15, ...). Its stats are fixed, not run through the normal difficulty
+// scaling/damage-cap logic -- 20 damage intentionally exceeds the player's
+// own 10, unlike every regular tier.
+const BOSS_LEVEL_INTERVAL = 5;
+const BOSS_MAX_HEALTH = 200;
+const BOSS_DAMAGE = 20;
+const BOSS_SPEED = 90;
+const BOSS_FIRE_COOLDOWN_MS = 1000;
+const BOSS_SCALE = TANK_SCALE * 1.6;
+const BOSS_TINT = 0x1a1a1a;
+
+type EnemyColor = "red" | "purple" | "blue" | "gold" | "boss";
 
 interface EnemyTier {
   color: EnemyColor;
   tint: number;
   label: string;
   maxHealth: number;
-  damage: number; // kept below PLAYER_PROJECTILE_DAMAGE at every tier, so the player always out-damages enemies
+  damage: number;
   speed: number;
   fireCooldownMs: number;
 }
 
-// Red = easy, purple = medium, blue = harder, gold = hard: health, damage,
-// speed, and fire rate all scale up together with tier difficulty.
+// Red = 1 (easy), purple = 2 (medium), blue = 3 (harder), gold = 4 (hard):
+// health, damage, speed, and fire rate all scale up together with tier
+// number. Regular tiers keep damage below PLAYER_PROJECTILE_DAMAGE so the
+// player always out-damages them; the boss is the deliberate exception.
 const ENEMY_TIERS: Record<EnemyColor, EnemyTier> = {
-  red: { color: "red", tint: 0xe53935, label: "Easy", maxHealth: 30, damage: 3, speed: 80, fireCooldownMs: 1500 },
-  purple: { color: "purple", tint: 0x9c27b0, label: "Medium", maxHealth: 60, damage: 5, speed: 95, fireCooldownMs: 1200 },
-  blue: { color: "blue", tint: 0x2196f3, label: "Harder", maxHealth: 100, damage: 7, speed: 110, fireCooldownMs: 950 },
-  gold: { color: "gold", tint: 0xffc400, label: "Hard", maxHealth: 150, damage: 9, speed: 125, fireCooldownMs: 750 },
+  red: { color: "red", tint: 0xe53935, label: "1", maxHealth: 30, damage: 3, speed: 80, fireCooldownMs: 1500 },
+  purple: { color: "purple", tint: 0x9c27b0, label: "2", maxHealth: 60, damage: 5, speed: 95, fireCooldownMs: 1200 },
+  blue: { color: "blue", tint: 0x2196f3, label: "3", maxHealth: 100, damage: 7, speed: 110, fireCooldownMs: 950 },
+  gold: { color: "gold", tint: 0xffc400, label: "4", maxHealth: 150, damage: 9, speed: 125, fireCooldownMs: 750 },
+  boss: {
+    color: "boss",
+    tint: BOSS_TINT,
+    label: "BOSS",
+    maxHealth: BOSS_MAX_HEALTH,
+    damage: BOSS_DAMAGE,
+    speed: BOSS_SPEED,
+    fireCooldownMs: BOSS_FIRE_COOLDOWN_MS,
+  },
 };
-const ENEMY_COLORS: EnemyColor[] = ["red", "purple", "blue", "gold"];
+const ENEMY_COLORS: Exclude<EnemyColor, "boss">[] = ["red", "purple", "blue", "gold"]; // bosses only spawn via spawnBoss()
 
 type EnemyHullSprite = Phaser.GameObjects.Image & { body: Phaser.Physics.Arcade.Body };
 
@@ -103,6 +126,7 @@ export class GameScene extends Phaser.Scene {
   private enemyTurretKey!: string;
   private enemyGroup!: Phaser.Physics.Arcade.Group;
   private enemyProjectiles!: Phaser.Physics.Arcade.Group;
+  private nextBossLevel = BOSS_LEVEL_INTERVAL;
 
   private moveStick = new Joystick(JOYSTICK_RADIUS);
   private aimStick = new Joystick(JOYSTICK_RADIUS);
@@ -216,7 +240,13 @@ export class GameScene extends Phaser.Scene {
     this.applyMovement(delta);
     this.updateTankVisuals();
     this.updateEnemyAI();
-    this.difficultyText.setText(`Difficulty: ${this.getDifficultyLevel() + 1}`);
+
+    const displayedLevel = this.getDifficultyLevel() + 1;
+    this.difficultyText.setText(`Difficulty: ${displayedLevel}`);
+    if (displayedLevel >= this.nextBossLevel) {
+      this.spawnBoss();
+      this.nextBossLevel += BOSS_LEVEL_INTERVAL;
+    }
 
     if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
       this.fireAtEnemy();
@@ -245,7 +275,7 @@ export class GameScene extends Phaser.Scene {
 
   /** Weighted random color: harder tiers become more likely to spawn as the difficulty level rises. */
   private pickWeightedColor(level: number): EnemyColor {
-    const weights: Record<EnemyColor, number> = {
+    const weights: Record<Exclude<EnemyColor, "boss">, number> = {
       red: Math.max(1, 6 - level),
       purple: 4,
       blue: Math.max(0, level - 1),
@@ -321,24 +351,33 @@ export class GameScene extends Phaser.Scene {
 
   private spawnEnemy(color: EnemyColor): void {
     const tier = this.getScaledTier(ENEMY_TIERS[color], this.getDifficultyLevel());
+    this.createEnemyInstance(tier, TANK_SCALE, 32, "#ffffff", "14px");
+  }
+
+  /** Fixed stats, not scaled by difficulty level -- see BOSS_* constants. */
+  private spawnBoss(): void {
+    this.createEnemyInstance(ENEMY_TIERS.boss, BOSS_SCALE, 40, "#ff5252", "18px");
+  }
+
+  private createEnemyInstance(tier: EnemyTier, scale: number, labelOffsetY: number, textColor: string, fontSize: string): EnemyInstance {
     const { width, height } = this.scale;
     const x = Phaser.Math.Between(width * 0.55, width * 0.95);
     const y = Phaser.Math.Between(height * 0.1, height * 0.9);
 
-    const hull = this.add.image(x, y, this.enemyHullKey).setScale(TANK_SCALE).setTint(tier.tint) as EnemyHullSprite;
+    const hull = this.add.image(x, y, this.enemyHullKey).setScale(scale).setTint(tier.tint) as EnemyHullSprite;
     this.physics.add.existing(hull);
     hull.body.setCollideWorldBounds(true);
     hull.setDepth(0);
     this.enemyGroup.add(hull);
 
-    const turret = this.add.image(x, y, this.enemyTurretKey).setScale(TANK_SCALE).setTint(tier.tint).setDepth(1);
+    const turret = this.add.image(x, y, this.enemyTurretKey).setScale(scale).setTint(tier.tint).setDepth(1);
 
     const health = new Health(tier.maxHealth);
     const healthText = this.add
-      .text(x, y - 32, `${tier.label} ${health.value}`, {
+      .text(x, y - labelOffsetY, `${tier.label} ${health.value}`, {
         fontFamily: "monospace",
-        fontSize: "14px",
-        color: "#ffffff",
+        fontSize,
+        color: textColor,
       })
       .setOrigin(0.5)
       .setDepth(2);
@@ -347,6 +386,7 @@ export class GameScene extends Phaser.Scene {
     (hull as unknown as { enemyInstance: EnemyInstance }).enemyInstance = instance;
 
     this.enemies.push(instance);
+    return instance;
   }
 
   private updateEnemyAI(): void {
