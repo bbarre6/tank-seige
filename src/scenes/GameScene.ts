@@ -84,6 +84,30 @@ const LEVEL_DAMAGE_PER_CLEAR = 0.4; // still hard-capped below PLAYER_PROJECTILE
 
 const BOSS_SCALE = TANK_SCALE * 1.6;
 
+// Progress otherwise lives only in memory, so a page refresh would silently
+// drop the player back to session 1 -- persist just the level-clear count
+// (the one thing session/level numbering derives from) so a reload resumes
+// where the player left off instead of looking like the session reset.
+const LEVELS_CLEARED_STORAGE_KEY = "tank-siege:totalLevelsCleared";
+
+function loadSavedLevelsCleared(): number {
+  try {
+    const raw = window.localStorage.getItem(LEVELS_CLEARED_STORAGE_KEY);
+    const parsed = raw === null ? 0 : Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  } catch {
+    return 0; // localStorage can throw (privacy mode, disabled storage, etc.)
+  }
+}
+
+function saveLevelsCleared(totalLevelsCleared: number): void {
+  try {
+    window.localStorage.setItem(LEVELS_CLEARED_STORAGE_KEY, String(totalLevelsCleared));
+  } catch {
+    // Best-effort only; losing persistence shouldn't break gameplay.
+  }
+}
+
 type EnemyHullSprite = Phaser.GameObjects.Image & { body: Phaser.Physics.Arcade.Body };
 
 interface EnemyInstance {
@@ -126,7 +150,7 @@ export class GameScene extends Phaser.Scene {
   private enemyTurretKey!: string;
   private enemyGroup!: Phaser.Physics.Arcade.Group;
   private enemyProjectiles!: Phaser.Physics.Arcade.Group;
-  private totalLevelsCleared = 0; // persists across cycles; drives stat scaling
+  private totalLevelsCleared = loadSavedLevelsCleared(); // persists across cycles (and page reloads); drives stat scaling
   private killsThisLevel = 0;
 
   private moveStick = new Joystick(JOYSTICK_RADIUS);
@@ -717,6 +741,7 @@ export class GameScene extends Phaser.Scene {
 
     // Level cleared: drop any stragglers of the old color and move on.
     this.totalLevelsCleared += 1;
+    saveLevelsCleared(this.totalLevelsCleared);
     this.clearAllEnemies();
     this.time.delayedCall(LEVEL_TRANSITION_DELAY_MS, () => this.startLevel());
   }
