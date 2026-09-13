@@ -9,6 +9,13 @@ const TANK_SPEED = 220; // px/s
 const TANK_SCALE = 1.5;
 const JOYSTICK_RADIUS = 60;
 
+// The world is bigger than the viewport; the camera follows the player with
+// a deadzone, so the map only scrolls once the player nears the screen edge.
+const WORLD_WIDTH = 2400;
+const WORLD_HEIGHT = 2400;
+const MIN_SPAWN_DISTANCE_FROM_PLAYER = 400;
+const MAX_SPAWN_DISTANCE_FROM_PLAYER = 1200;
+
 const PLAYER_MAX_HEALTH = 100;
 const PLAYER_PROJECTILE_SPEED = 520;
 const PLAYER_PROJECTILE_DAMAGE = 10;
@@ -149,15 +156,23 @@ export class GameScene extends Phaser.Scene {
   create(): void {
     const { width, height } = this.scale;
 
+    this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+
     const groundKey = ensureGroundTexture(this);
-    this.add.tileSprite(0, 0, width, height, groundKey).setOrigin(0, 0).setDepth(-1);
+    this.add.tileSprite(0, 0, WORLD_WIDTH, WORLD_HEIGHT, groundKey).setOrigin(0, 0).setDepth(-1);
 
     const { hullKey, turretKey } = ensureTankTextures(this);
 
-    this.tank = this.add.image(width / 2, height / 2, hullKey).setScale(TANK_SCALE) as typeof this.tank;
+    this.tank = this.add.image(WORLD_WIDTH / 2, WORLD_HEIGHT / 2, hullKey).setScale(TANK_SCALE) as typeof this.tank;
     this.physics.add.existing(this.tank);
     this.tank.body.setCollideWorldBounds(true);
     this.tank.setDepth(0);
+
+    // Camera only scrolls once the player nears the edge of the screen --
+    // it stays put while the player moves within the central deadzone.
+    this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+    this.cameras.main.startFollow(this.tank, true, 0.08, 0.08);
+    this.cameras.main.setDeadzone(width * 0.5, height * 0.5);
 
     this.turretSprite = this.add.image(this.tank.x, this.tank.y, turretKey).setScale(TANK_SCALE).setDepth(1);
 
@@ -493,10 +508,26 @@ export class GameScene extends Phaser.Scene {
     this.createEnemyInstance(ENEMY_TIERS.boss, BOSS_SCALE, 40, "#ff5252", "18px");
   }
 
+  /** Random position within the world, biased to a band around the player so spawns are neither point-blank nor absurdly far. */
+  private getRandomSpawnPosition(): Vector2 {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const x = Phaser.Math.Between(0, WORLD_WIDTH);
+      const y = Phaser.Math.Between(0, WORLD_HEIGHT);
+      const distance = Math.hypot(x - this.tank.x, y - this.tank.y);
+      if (distance >= MIN_SPAWN_DISTANCE_FROM_PLAYER && distance <= MAX_SPAWN_DISTANCE_FROM_PLAYER) {
+        return { x, y };
+      }
+    }
+
+    const angle = Math.random() * Math.PI * 2;
+    return {
+      x: Phaser.Math.Clamp(this.tank.x + Math.cos(angle) * MIN_SPAWN_DISTANCE_FROM_PLAYER, 0, WORLD_WIDTH),
+      y: Phaser.Math.Clamp(this.tank.y + Math.sin(angle) * MIN_SPAWN_DISTANCE_FROM_PLAYER, 0, WORLD_HEIGHT),
+    };
+  }
+
   private createEnemyInstance(tier: EnemyTier, scale: number, labelOffsetY: number, textColor: string, fontSize: string): EnemyInstance {
-    const { width, height } = this.scale;
-    const x = Phaser.Math.Between(width * 0.55, width * 0.95);
-    const y = Phaser.Math.Between(height * 0.1, height * 0.9);
+    const { x, y } = this.getRandomSpawnPosition();
 
     const hull = this.add.image(x, y, this.enemyHullKey).setScale(scale).setTint(tier.tint) as EnemyHullSprite;
     this.physics.add.existing(hull);
