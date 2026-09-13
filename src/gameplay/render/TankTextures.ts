@@ -29,18 +29,20 @@ const PLAYER_PALETTE: TankPalette = {
   outline: 0x1f2210,
 };
 
+// Neutral gunmetal palette so setTint() can recolor it per difficulty tier
+// (red/purple/blue/gold) while keeping the camo/rivet/highlight shading.
 const ENEMY_PALETTE: TankPalette = {
-  hullBase: 0x7a2420,
-  hullHighlight: 0xa8452e,
-  hullShadow: 0x431210,
-  camoDark: 0x551a17,
-  camoLight: 0x8f3a22,
+  hullBase: 0x8a8f94,
+  hullHighlight: 0xbfc4c8,
+  hullShadow: 0x54585c,
+  camoDark: 0x6b7075,
+  camoLight: 0xa3a8ac,
   tread: 0x2b2b2b,
   treadLink: 0x1a1a1a,
   rivet: 0x14150a,
-  turretBase: 0x8a2b28,
-  hatch: 0x5c1f1c,
-  outline: 0x261210,
+  turretBase: 0x9aa0a5,
+  hatch: 0x6f7478,
+  outline: 0x2a2c2e,
 };
 
 const PLAYER_HULL_KEY = "tank-hull";
@@ -58,7 +60,9 @@ const HULL_BODY_BOTTOM = 20;
  * both authored facing +x/right so a 0 rotation means "facing right").
  * Generated once per scene and cached by key, so no external art asset or
  * reference image is used or copied. The player and enemy share the same
- * detailed drawing routines, only the palette differs (olive vs. rust).
+ * detailed drawing routines -- the player is a fixed olive-drab palette,
+ * while the enemy texture is neutral gunmetal gray meant to be recolored
+ * per difficulty tier via setTint() (see GameScene's ENEMY_TIERS).
  */
 export function ensureTankTextures(scene: Phaser.Scene): { hullKey: string; turretKey: string } {
   drawHullTexture(scene, PLAYER_HULL_KEY, PLAYER_PALETTE);

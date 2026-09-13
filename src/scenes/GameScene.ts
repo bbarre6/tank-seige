@@ -3,6 +3,7 @@ import { Joystick, type Vector2 } from "../gameplay/input/Joystick";
 import { spawnProjectile } from "../gameplay/combat/Projectile";
 import { Health } from "../gameplay/combat/Health";
 import { ensureTankTextures, ensureEnemyTankTextures } from "../gameplay/render/TankTextures";
+import { ensureGroundTexture } from "../gameplay/render/GroundTexture";
 
 const TANK_SPEED = 220; // px/s
 const TANK_SCALE = 1.5;
@@ -14,16 +15,46 @@ const PLAYER_PROJECTILE_DAMAGE = 10;
 const PLAYER_FIRE_COOLDOWN_MS = 200;
 const SPACE_FIRE_COOLDOWN_MS = 300; // separate cap on the spacebar auto-fire shortcut
 
-const ENEMY_MAX_HEALTH = 80;
-const ENEMY_SPEED = 90; // slower than the player so it's chaseable, not oppressive
 const ENEMY_PROJECTILE_SPEED = 260;
-const ENEMY_PROJECTILE_DAMAGE = 5; // half the player's damage, per design: player should out-damage enemies
-const ENEMY_FIRE_COOLDOWN_MS = 1200;
+const ENEMY_PROJECTILE_DAMAGE_FALLBACK = 5;
 const ENEMY_PREFERRED_DISTANCE = 260; // holds roughly this far from the player to shoot from
 const ENEMY_DISTANCE_DEADZONE = 20;
 const ENEMY_RESPAWN_DELAY_MS = 1500;
 
 const PROJECTILE_LIFESPAN_MS = 1500;
+
+type EnemyColor = "red" | "purple" | "blue" | "gold";
+
+interface EnemyTier {
+  color: EnemyColor;
+  tint: number;
+  label: string;
+  maxHealth: number;
+  damage: number; // kept below PLAYER_PROJECTILE_DAMAGE at every tier, so the player always out-damages enemies
+  speed: number;
+  fireCooldownMs: number;
+}
+
+// Red = easy, purple = medium, blue = harder, gold = hard: health, damage,
+// speed, and fire rate all scale up together with tier difficulty.
+const ENEMY_TIERS: Record<EnemyColor, EnemyTier> = {
+  red: { color: "red", tint: 0xe53935, label: "Easy", maxHealth: 30, damage: 3, speed: 80, fireCooldownMs: 1500 },
+  purple: { color: "purple", tint: 0x9c27b0, label: "Medium", maxHealth: 60, damage: 5, speed: 95, fireCooldownMs: 1200 },
+  blue: { color: "blue", tint: 0x2196f3, label: "Harder", maxHealth: 100, damage: 7, speed: 110, fireCooldownMs: 950 },
+  gold: { color: "gold", tint: 0xffc400, label: "Hard", maxHealth: 150, damage: 9, speed: 125, fireCooldownMs: 750 },
+};
+const ENEMY_COLORS: EnemyColor[] = ["red", "purple", "blue", "gold"];
+
+type EnemyHullSprite = Phaser.GameObjects.Image & { body: Phaser.Physics.Arcade.Body };
+
+interface EnemyInstance {
+  hull: EnemyHullSprite;
+  turret: Phaser.GameObjects.Image;
+  healthText: Phaser.GameObjects.Text;
+  health: Health;
+  tier: EnemyTier;
+  lastFiredAt: number;
+}
 
 /**
  * US-1.1: basic tank movement (AC-1.1.1) and independent aim/fire (AC-1.1.2).
@@ -31,14 +62,14 @@ const PROJECTILE_LIFESPAN_MS = 1500;
  * release-to-fire) and desktop WASD + mouse (click to fire), since the PRD
  * targets both desktop and mobile web.
  *
- * The enemy tank here is a single hand-placed stand-in with simple chase-and-
- * shoot AI, not the real wave spawner (US-1.2 will replace this with proper
- * wave-based enemy spawning). It deals less damage than the player (design
- * intent: the player should out-damage enemies). Defeating it destroys it
- * and a fresh one respawns elsewhere after a short delay, since there's no
- * wave/win-condition system yet to give a permanent kill somewhere to go.
- * The player has no game-over flow yet either, so it simply respawns at
- * full health when defeated.
+ * Multiple enemy tanks are on the field at once, each with simple chase-and-
+ * shoot AI and a color-coded difficulty tier (ENEMY_TIERS) -- not the real
+ * wave spawner (US-1.2 will replace this with proper wave-based spawning).
+ * Every tier deals less damage than the player by design. Defeating an
+ * enemy destroys it and a new, randomly-tiered one respawns elsewhere after
+ * a short delay, keeping the field populated since there's no wave/win-
+ * condition system yet. The player has no game-over flow yet either, so it
+ * simply respawns at full health when defeated.
  */
 export class GameScene extends Phaser.Scene {
   private tank!: Phaser.GameObjects.Image & { body: Phaser.Physics.Arcade.Body };
@@ -48,16 +79,11 @@ export class GameScene extends Phaser.Scene {
   private playerHealthText!: Phaser.GameObjects.Text;
   private playerProjectiles!: Phaser.Physics.Arcade.Group;
 
-  private enemy!: Phaser.GameObjects.Image & { body: Phaser.Physics.Arcade.Body };
-  private enemyTurretSprite!: Phaser.GameObjects.Image;
+  private enemies: EnemyInstance[] = [];
   private enemyHullKey!: string;
   private enemyTurretKey!: string;
   private enemyGroup!: Phaser.Physics.Arcade.Group;
-  private enemyHealth = new Health(ENEMY_MAX_HEALTH);
-  private enemyHealthText!: Phaser.GameObjects.Text;
   private enemyProjectiles!: Phaser.Physics.Arcade.Group;
-  private enemyAlive = false;
-  private enemyLastFiredAt = 0;
 
   private moveStick = new Joystick(JOYSTICK_RADIUS);
   private aimStick = new Joystick(JOYSTICK_RADIUS);
@@ -77,6 +103,10 @@ export class GameScene extends Phaser.Scene {
 
   create(): void {
     const { width, height } = this.scale;
+
+    const groundKey = ensureGroundTexture(this);
+    this.add.tileSprite(0, 0, width, height, groundKey).setOrigin(0, 0).setDepth(-1);
+
     const { hullKey, turretKey } = ensureTankTextures(this);
 
     this.tank = this.add.image(width / 2, height / 2, hullKey).setScale(TANK_SCALE) as typeof this.tank;
@@ -92,14 +122,17 @@ export class GameScene extends Phaser.Scene {
         fontSize: "16px",
         color: "#ffffff",
       })
-      .setScrollFactor(0);
+      .setScrollFactor(0)
+      .setDepth(2);
 
     const enemyTextures = ensureEnemyTankTextures(this);
     this.enemyHullKey = enemyTextures.hullKey;
     this.enemyTurretKey = enemyTextures.turretKey;
 
     this.enemyGroup = this.physics.add.group();
-    this.spawnEnemy();
+    for (const color of ENEMY_COLORS) {
+      this.spawnEnemy(color);
+    }
 
     this.playerProjectiles = this.physics.add.group();
     this.enemyProjectiles = this.physics.add.group();
@@ -108,8 +141,8 @@ export class GameScene extends Phaser.Scene {
     // the Group-vs-single-object case below, where the single object is
     // always reordered to come first), so the playerProjectiles member is
     // the first callback argument and the enemyGroup member is the second.
-    this.physics.add.overlap(this.playerProjectiles, this.enemyGroup, (projectile, _enemy) => {
-      this.handleEnemyHit(projectile as Phaser.GameObjects.Arc);
+    this.physics.add.overlap(this.playerProjectiles, this.enemyGroup, (projectile, enemyHull) => {
+      this.handleEnemyHit(projectile as Phaser.GameObjects.Arc, enemyHull as Phaser.GameObjects.GameObject);
     });
     this.physics.add.overlap(this.enemyProjectiles, this.tank, (_tank, projectile) => {
       this.handlePlayerHit(projectile as Phaser.GameObjects.Arc);
@@ -156,22 +189,37 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  /** Spacebar: fire at most once per SPACE_FIRE_COOLDOWN_MS, auto-aimed at the current enemy. */
+  /** Spacebar: fire at most once per SPACE_FIRE_COOLDOWN_MS, auto-aimed at the nearest enemy. */
   private fireAtEnemy(): void {
-    if (!this.enemyAlive) return;
+    const target = this.findNearestEnemy();
+    if (!target) return;
 
     const now = this.time.now;
     if (now - this.lastSpaceFiredAt < SPACE_FIRE_COOLDOWN_MS) return;
 
-    const target = { x: this.enemy.x, y: this.enemy.y };
-    const dx = target.x - this.tank.x;
-    const dy = target.y - this.tank.y;
+    const dx = target.hull.x - this.tank.x;
+    const dy = target.hull.y - this.tank.y;
     const distance = Math.hypot(dx, dy);
     if (distance === 0) return;
 
     this.lastSpaceFiredAt = now;
     this.tankFacing = { x: dx / distance, y: dy / distance };
-    this.fireToward(target);
+    this.fireToward({ x: target.hull.x, y: target.hull.y });
+  }
+
+  private findNearestEnemy(): EnemyInstance | null {
+    let nearest: EnemyInstance | null = null;
+    let nearestDistance = Infinity;
+
+    for (const enemy of this.enemies) {
+      const distance = Math.hypot(enemy.hull.x - this.tank.x, enemy.hull.y - this.tank.y);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearest = enemy;
+      }
+    }
+
+    return nearest;
   }
 
   private updateTankVisuals(): void {
@@ -185,69 +233,75 @@ export class GameScene extends Phaser.Scene {
     this.turretSprite.rotation = Math.atan2(this.tankFacing.y, this.tankFacing.x);
   }
 
-  private spawnEnemy(): void {
+  private spawnEnemy(color: EnemyColor): void {
+    const tier = ENEMY_TIERS[color];
     const { width, height } = this.scale;
-    const x = Phaser.Math.Between(width * 0.6, width * 0.9);
-    const y = Phaser.Math.Between(height * 0.15, height * 0.6);
+    const x = Phaser.Math.Between(width * 0.55, width * 0.95);
+    const y = Phaser.Math.Between(height * 0.1, height * 0.9);
 
-    this.enemy = this.add.image(x, y, this.enemyHullKey).setScale(TANK_SCALE) as typeof this.enemy;
-    this.physics.add.existing(this.enemy);
-    this.enemy.body.setCollideWorldBounds(true);
-    this.enemy.setDepth(0);
-    this.enemyGroup.add(this.enemy);
+    const hull = this.add.image(x, y, this.enemyHullKey).setScale(TANK_SCALE).setTint(tier.tint) as EnemyHullSprite;
+    this.physics.add.existing(hull);
+    hull.body.setCollideWorldBounds(true);
+    hull.setDepth(0);
+    this.enemyGroup.add(hull);
 
-    this.enemyTurretSprite = this.add.image(x, y, this.enemyTurretKey).setScale(TANK_SCALE).setDepth(1);
+    const turret = this.add.image(x, y, this.enemyTurretKey).setScale(TANK_SCALE).setTint(tier.tint).setDepth(1);
 
-    this.enemyHealth.reset();
-    this.enemyHealthText = this.add
-      .text(this.enemy.x, this.enemy.y - 32, `${this.enemyHealth.value}`, {
+    const health = new Health(tier.maxHealth);
+    const healthText = this.add
+      .text(x, y - 32, `${tier.label} ${health.value}`, {
         fontFamily: "monospace",
-        fontSize: "16px",
+        fontSize: "14px",
         color: "#ffffff",
       })
-      .setOrigin(0.5);
+      .setOrigin(0.5)
+      .setDepth(2);
 
-    this.enemyAlive = true;
+    const instance: EnemyInstance = { hull, turret, healthText, health, tier, lastFiredAt: 0 };
+    (hull as unknown as { enemyInstance: EnemyInstance }).enemyInstance = instance;
+
+    this.enemies.push(instance);
   }
 
   private updateEnemyAI(): void {
-    if (!this.enemyAlive) return;
-
-    const dx = this.tank.x - this.enemy.x;
-    const dy = this.tank.y - this.enemy.y;
-    const distance = Math.hypot(dx, dy);
-    if (distance === 0) return;
-
-    const toPlayer = { x: dx / distance, y: dy / distance };
-
-    if (distance > ENEMY_PREFERRED_DISTANCE + ENEMY_DISTANCE_DEADZONE) {
-      this.enemy.body.setVelocity(toPlayer.x * ENEMY_SPEED, toPlayer.y * ENEMY_SPEED);
-      this.enemy.rotation = Math.atan2(toPlayer.y, toPlayer.x);
-    } else if (distance < ENEMY_PREFERRED_DISTANCE - ENEMY_DISTANCE_DEADZONE) {
-      this.enemy.body.setVelocity(-toPlayer.x * ENEMY_SPEED, -toPlayer.y * ENEMY_SPEED);
-      this.enemy.rotation = Math.atan2(-toPlayer.y, -toPlayer.x);
-    } else {
-      this.enemy.body.setVelocity(0, 0);
-    }
-
-    // Turret always tracks the player, independent of hull facing.
-    this.enemyTurretSprite.setPosition(this.enemy.x, this.enemy.y);
-    this.enemyTurretSprite.rotation = Math.atan2(toPlayer.y, toPlayer.x);
-
-    this.enemyHealthText.setPosition(this.enemy.x, this.enemy.y - 32);
-
     const now = this.time.now;
-    if (now - this.enemyLastFiredAt < ENEMY_FIRE_COOLDOWN_MS) return;
-    this.enemyLastFiredAt = now;
 
-    const spawn = spawnProjectile({ x: this.enemy.x, y: this.enemy.y }, toPlayer, ENEMY_PROJECTILE_SPEED, ENEMY_PROJECTILE_DAMAGE);
-    const projectile = this.add.circle(spawn.x, spawn.y, 5, 0xff8a65);
-    this.enemyProjectiles.add(projectile);
-    const body = projectile.body as Phaser.Physics.Arcade.Body;
-    body.setVelocity(spawn.velocityX, spawn.velocityY);
-    (projectile as unknown as { damage: number }).damage = spawn.damage;
+    for (const enemy of this.enemies) {
+      const dx = this.tank.x - enemy.hull.x;
+      const dy = this.tank.y - enemy.hull.y;
+      const distance = Math.hypot(dx, dy);
+      if (distance === 0) continue;
 
-    this.time.delayedCall(PROJECTILE_LIFESPAN_MS, () => projectile.destroy());
+      const toPlayer = { x: dx / distance, y: dy / distance };
+      const speed = enemy.tier.speed;
+
+      if (distance > ENEMY_PREFERRED_DISTANCE + ENEMY_DISTANCE_DEADZONE) {
+        enemy.hull.body.setVelocity(toPlayer.x * speed, toPlayer.y * speed);
+        enemy.hull.rotation = Math.atan2(toPlayer.y, toPlayer.x);
+      } else if (distance < ENEMY_PREFERRED_DISTANCE - ENEMY_DISTANCE_DEADZONE) {
+        enemy.hull.body.setVelocity(-toPlayer.x * speed, -toPlayer.y * speed);
+        enemy.hull.rotation = Math.atan2(-toPlayer.y, -toPlayer.x);
+      } else {
+        enemy.hull.body.setVelocity(0, 0);
+      }
+
+      // Turret always tracks the player, independent of hull facing.
+      enemy.turret.setPosition(enemy.hull.x, enemy.hull.y);
+      enemy.turret.rotation = Math.atan2(toPlayer.y, toPlayer.x);
+      enemy.healthText.setPosition(enemy.hull.x, enemy.hull.y - 32);
+
+      if (now - enemy.lastFiredAt < enemy.tier.fireCooldownMs) continue;
+      enemy.lastFiredAt = now;
+
+      const spawn = spawnProjectile({ x: enemy.hull.x, y: enemy.hull.y }, toPlayer, ENEMY_PROJECTILE_SPEED, enemy.tier.damage);
+      const projectile = this.add.circle(spawn.x, spawn.y, 5, enemy.tier.tint);
+      this.enemyProjectiles.add(projectile);
+      const body = projectile.body as Phaser.Physics.Arcade.Body;
+      body.setVelocity(spawn.velocityX, spawn.velocityY);
+      (projectile as unknown as { damage: number }).damage = spawn.damage;
+
+      this.time.delayedCall(PROJECTILE_LIFESPAN_MS, () => projectile.destroy());
+    }
   }
 
   private setupTouchControls(width: number): void {
@@ -336,26 +390,30 @@ export class GameScene extends Phaser.Scene {
     this.time.delayedCall(PROJECTILE_LIFESPAN_MS, () => projectile.destroy());
   }
 
-  private handleEnemyHit(projectile: Phaser.GameObjects.Arc): void {
-    if (!this.enemyAlive) return;
-
+  private handleEnemyHit(projectile: Phaser.GameObjects.Arc, enemyHull: Phaser.GameObjects.GameObject): void {
     const damage = (projectile as unknown as { damage: number }).damage ?? PLAYER_PROJECTILE_DAMAGE;
     projectile.destroy();
 
-    this.enemyHealth.takeDamage(damage);
-    this.enemyHealthText.setText(`${this.enemyHealth.value}`);
+    const instance = (enemyHull as unknown as { enemyInstance?: EnemyInstance }).enemyInstance;
+    if (!instance) return;
 
-    if (this.enemyHealth.isDead) {
-      this.enemyAlive = false;
-      this.enemy.destroy();
-      this.enemyTurretSprite.destroy();
-      this.enemyHealthText.destroy();
-      this.time.delayedCall(ENEMY_RESPAWN_DELAY_MS, () => this.spawnEnemy());
+    const index = this.enemies.indexOf(instance);
+    if (index === -1) return; // already defeated by another projectile this frame
+
+    instance.health.takeDamage(damage);
+    instance.healthText.setText(`${instance.tier.label} ${instance.health.value}`);
+
+    if (instance.health.isDead) {
+      this.enemies.splice(index, 1);
+      instance.hull.destroy();
+      instance.turret.destroy();
+      instance.healthText.destroy();
+      this.time.delayedCall(ENEMY_RESPAWN_DELAY_MS, () => this.spawnEnemy(Phaser.Utils.Array.GetRandom(ENEMY_COLORS)));
     }
   }
 
   private handlePlayerHit(projectile: Phaser.GameObjects.Arc): void {
-    const damage = (projectile as unknown as { damage: number }).damage ?? ENEMY_PROJECTILE_DAMAGE;
+    const damage = (projectile as unknown as { damage: number }).damage ?? ENEMY_PROJECTILE_DAMAGE_FALLBACK;
     projectile.destroy();
 
     this.playerHealth.takeDamage(damage);
