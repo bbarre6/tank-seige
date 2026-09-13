@@ -23,6 +23,24 @@ const ENEMY_RESPAWN_DELAY_MS = 1500;
 
 const PROJECTILE_LIFESPAN_MS = 1500;
 
+// Difficulty ramp: every DIFFICULTY_INTERVAL_MS of play, the difficulty
+// level goes up by 1. Newly-spawned enemies get progressively tougher
+// stats and the field skews toward harder colors, and the target enemy
+// count on the field also grows -- all applied only to *new* spawns, so
+// the game gets harder the farther in you get without retroactively
+// buffing tanks already on the field.
+const DIFFICULTY_INTERVAL_MS = 20000;
+const DIFFICULTY_HEALTH_SCALE_PER_LEVEL = 0.15;
+const DIFFICULTY_SPEED_SCALE_PER_LEVEL = 0.05;
+const DIFFICULTY_SPEED_SCALE_CAP = 1.6;
+const DIFFICULTY_FIRE_RATE_SCALE_PER_LEVEL = 0.05;
+const DIFFICULTY_FIRE_RATE_SCALE_FLOOR = 0.5;
+const DIFFICULTY_DAMAGE_PER_LEVEL = 0.4; // damage still hard-capped below PLAYER_PROJECTILE_DAMAGE, see getScaledTier
+const BASE_ENEMY_COUNT = 4;
+const MAX_ENEMY_COUNT = 8;
+const DIFFICULTY_LEVELS_PER_EXTRA_ENEMY = 3;
+const POPULATION_CHECK_INTERVAL_MS = 5000;
+
 type EnemyColor = "red" | "purple" | "blue" | "gold";
 
 interface EnemyTier {
@@ -77,6 +95,7 @@ export class GameScene extends Phaser.Scene {
   private tankFacing: Vector2 = { x: 1, y: 0 }; // matches the hull/turret art's neutral "facing right" orientation
   private playerHealth = new Health(PLAYER_MAX_HEALTH);
   private playerHealthText!: Phaser.GameObjects.Text;
+  private difficultyText!: Phaser.GameObjects.Text;
   private playerProjectiles!: Phaser.Physics.Arcade.Group;
 
   private enemies: EnemyInstance[] = [];
@@ -125,6 +144,15 @@ export class GameScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(2);
 
+    this.difficultyText = this.add
+      .text(16, 40, "Difficulty: 1", {
+        fontFamily: "monospace",
+        fontSize: "16px",
+        color: "#ffffff",
+      })
+      .setScrollFactor(0)
+      .setDepth(2);
+
     const enemyTextures = ensureEnemyTankTextures(this);
     this.enemyHullKey = enemyTextures.hullKey;
     this.enemyTurretKey = enemyTextures.turretKey;
@@ -133,6 +161,11 @@ export class GameScene extends Phaser.Scene {
     for (const color of ENEMY_COLORS) {
       this.spawnEnemy(color);
     }
+    this.time.addEvent({
+      delay: POPULATION_CHECK_INTERVAL_MS,
+      loop: true,
+      callback: () => this.maintainEnemyPopulation(),
+    });
 
     this.playerProjectiles = this.physics.add.group();
     this.enemyProjectiles = this.physics.add.group();
@@ -183,9 +216,62 @@ export class GameScene extends Phaser.Scene {
     this.applyMovement(delta);
     this.updateTankVisuals();
     this.updateEnemyAI();
+    this.difficultyText.setText(`Difficulty: ${this.getDifficultyLevel() + 1}`);
 
     if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
       this.fireAtEnemy();
+    }
+  }
+
+  private getDifficultyLevel(): number {
+    return Math.floor(this.time.now / DIFFICULTY_INTERVAL_MS);
+  }
+
+  /** Scales a base tier's stats up by the current difficulty level, applied at spawn time only. */
+  private getScaledTier(baseTier: EnemyTier, level: number): EnemyTier {
+    const healthMultiplier = 1 + level * DIFFICULTY_HEALTH_SCALE_PER_LEVEL;
+    const speedMultiplier = Math.min(1 + level * DIFFICULTY_SPEED_SCALE_PER_LEVEL, DIFFICULTY_SPEED_SCALE_CAP);
+    const fireRateMultiplier = Math.max(1 - level * DIFFICULTY_FIRE_RATE_SCALE_PER_LEVEL, DIFFICULTY_FIRE_RATE_SCALE_FLOOR);
+    const damage = Math.min(baseTier.damage + level * DIFFICULTY_DAMAGE_PER_LEVEL, PLAYER_PROJECTILE_DAMAGE - 1);
+
+    return {
+      ...baseTier,
+      maxHealth: Math.round(baseTier.maxHealth * healthMultiplier),
+      speed: Math.round(baseTier.speed * speedMultiplier),
+      fireCooldownMs: Math.round(baseTier.fireCooldownMs * fireRateMultiplier),
+      damage: Math.round(damage),
+    };
+  }
+
+  /** Weighted random color: harder tiers become more likely to spawn as the difficulty level rises. */
+  private pickWeightedColor(level: number): EnemyColor {
+    const weights: Record<EnemyColor, number> = {
+      red: Math.max(1, 6 - level),
+      purple: 4,
+      blue: Math.max(0, level - 1),
+      gold: Math.max(0, level - 3),
+    };
+
+    const entries = ENEMY_COLORS.map((color) => [color, weights[color]] as const).filter(([, w]) => w > 0);
+    const total = entries.reduce((sum, [, w]) => sum + w, 0);
+    let roll = Math.random() * total;
+
+    for (const [color, w] of entries) {
+      if (roll < w) return color;
+      roll -= w;
+    }
+    return entries[entries.length - 1][0];
+  }
+
+  private getEnemyTargetCount(level: number): number {
+    return Math.min(BASE_ENEMY_COUNT + Math.floor(level / DIFFICULTY_LEVELS_PER_EXTRA_ENEMY), MAX_ENEMY_COUNT);
+  }
+
+  private maintainEnemyPopulation(): void {
+    const level = this.getDifficultyLevel();
+    const target = this.getEnemyTargetCount(level);
+    while (this.enemies.length < target) {
+      this.spawnEnemy(this.pickWeightedColor(level));
     }
   }
 
@@ -234,7 +320,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private spawnEnemy(color: EnemyColor): void {
-    const tier = ENEMY_TIERS[color];
+    const tier = this.getScaledTier(ENEMY_TIERS[color], this.getDifficultyLevel());
     const { width, height } = this.scale;
     const x = Phaser.Math.Between(width * 0.55, width * 0.95);
     const y = Phaser.Math.Between(height * 0.1, height * 0.9);
@@ -408,7 +494,7 @@ export class GameScene extends Phaser.Scene {
       instance.hull.destroy();
       instance.turret.destroy();
       instance.healthText.destroy();
-      this.time.delayedCall(ENEMY_RESPAWN_DELAY_MS, () => this.spawnEnemy(Phaser.Utils.Array.GetRandom(ENEMY_COLORS)));
+      this.time.delayedCall(ENEMY_RESPAWN_DELAY_MS, () => this.spawnEnemy(this.pickWeightedColor(this.getDifficultyLevel())));
     }
   }
 
