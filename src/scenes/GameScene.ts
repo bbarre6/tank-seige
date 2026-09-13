@@ -34,16 +34,17 @@ interface EnemyTier {
   damage: number;
   speed: number;
   fireCooldownMs: number;
+  coinReward: number; // flat, not scaled by difficulty level
 }
 
 // Level order: red(1) -> blue(2) -> purple(3) -> gold(4) -> boss(5), then
 // repeats. Regular tiers keep damage below PLAYER_PROJECTILE_DAMAGE so the
 // player always out-damages them; the boss is the deliberate exception.
 const ENEMY_TIERS: Record<EnemyColor, EnemyTier> = {
-  red: { color: "red", tint: 0xe53935, label: "1", maxHealth: 30, damage: 3, speed: 80, fireCooldownMs: 1500 },
-  blue: { color: "blue", tint: 0x2196f3, label: "2", maxHealth: 60, damage: 5, speed: 95, fireCooldownMs: 1200 },
-  purple: { color: "purple", tint: 0x9c27b0, label: "3", maxHealth: 100, damage: 7, speed: 110, fireCooldownMs: 950 },
-  gold: { color: "gold", tint: 0xffc400, label: "4", maxHealth: 150, damage: 9, speed: 125, fireCooldownMs: 750 },
+  red: { color: "red", tint: 0xe53935, label: "1", maxHealth: 30, damage: 3, speed: 80, fireCooldownMs: 1500, coinReward: 15 },
+  blue: { color: "blue", tint: 0x2196f3, label: "2", maxHealth: 60, damage: 5, speed: 95, fireCooldownMs: 1200, coinReward: 30 },
+  purple: { color: "purple", tint: 0x9c27b0, label: "3", maxHealth: 100, damage: 7, speed: 110, fireCooldownMs: 950, coinReward: 40 },
+  gold: { color: "gold", tint: 0xffc400, label: "4", maxHealth: 150, damage: 9, speed: 125, fireCooldownMs: 750, coinReward: 50 },
   boss: {
     color: "boss",
     tint: 0x1a1a1a,
@@ -52,6 +53,7 @@ const ENEMY_TIERS: Record<EnemyColor, EnemyTier> = {
     damage: 50, // intentionally exceeds PLAYER_PROJECTILE_DAMAGE, unlike every regular tier
     speed: 90,
     fireCooldownMs: 1000,
+    coinReward: 100,
   },
 };
 
@@ -108,6 +110,8 @@ export class GameScene extends Phaser.Scene {
   private playerHealth = new Health(PLAYER_MAX_HEALTH);
   private playerHealthText!: Phaser.GameObjects.Text;
   private levelText!: Phaser.GameObjects.Text;
+  private coins = 0;
+  private coinsText!: Phaser.GameObjects.Text;
   private playerProjectiles!: Phaser.Physics.Arcade.Group;
 
   private enemies: EnemyInstance[] = [];
@@ -171,6 +175,15 @@ export class GameScene extends Phaser.Scene {
         fontFamily: "monospace",
         fontSize: "16px",
         color: "#ffffff",
+      })
+      .setScrollFactor(0)
+      .setDepth(2);
+
+    this.coinsText = this.add
+      .text(16, 64, `Coins: ${this.coins}`, {
+        fontFamily: "monospace",
+        fontSize: "16px",
+        color: "#ffd700",
       })
       .setScrollFactor(0)
       .setDepth(2);
@@ -657,6 +670,9 @@ export class GameScene extends Phaser.Scene {
     instance.hull.destroy();
     instance.turret.destroy();
     instance.healthText.destroy();
+
+    this.coins += instance.tier.coinReward;
+    this.coinsText.setText(`Coins: ${this.coins}`);
 
     this.killsThisLevel += 1;
     if (this.killsThisLevel < this.getKillsRequiredForCurrentLevel()) {
