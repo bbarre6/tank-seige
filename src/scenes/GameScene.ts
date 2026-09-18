@@ -393,11 +393,12 @@ export class GameScene extends Phaser.Scene {
     elements.push(this.add.text(0, y, "...", { fontFamily: "monospace", fontSize: "16px", color: "#9e9e9e" }).setOrigin(0.5));
     y += rowHeight + 20;
 
-    const back = this.createMenuButton(0, y, "Back", () => {
+    const back = this.createMenuButton(-70, y, "Back", () => {
       this.sessionsMenuContainer.setVisible(false);
       this.pauseMenuContainer.setVisible(true);
     });
-    elements.push(back.bg, back.text);
+    const resume = this.createMenuButton(70, y, "Resume", () => this.togglePause());
+    elements.push(back.bg, back.text, resume.bg, resume.text);
 
     this.sessionsMenuContainer.add(elements);
   }
