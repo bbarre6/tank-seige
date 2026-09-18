@@ -277,7 +277,7 @@ export class GameScene extends Phaser.Scene {
     // desktop shortcut, but touch/mobile players have no keyboard at all.
     const pauseButton = this.createMenuButton(width - 60, 30, "Pause", () => this.togglePause());
     this.pauseButtonBg = pauseButton.bg.setScrollFactor(0).setDepth(2);
-    this.pauseButtonText = pauseButton.text.setScrollFactor(0).setDepth(2);
+    this.pauseButtonText = pauseButton.text.setScrollFactor(0).setDepth(3);
 
     this.setupTouchControls(width);
 
@@ -338,6 +338,13 @@ export class GameScene extends Phaser.Scene {
   private createMenuButton(x: number, y: number, label: string, onClick: () => void): { bg: Phaser.GameObjects.Rectangle; text: Phaser.GameObjects.Text } {
     const text = this.add.text(x, y, label, { fontFamily: "monospace", fontSize: "20px", color: "#ffffff" }).setOrigin(0.5).setScrollFactor(0);
     const bg = this.add.rectangle(x, y, text.width + 32, text.height + 16, 0x2e7d32).setStrokeStyle(2, 0xffffff).setScrollFactor(0);
+    // Text must render above its own background. Callers that nest these into
+    // a container reorder the children explicitly (bg before text) so this is
+    // moot there, but the always-visible on-screen Pause button is added
+    // straight to the scene with no such reordering -- without an explicit
+    // higher depth here, the bg (added after the text) would stack on top and
+    // hide the label entirely.
+    text.setDepth(bg.depth + 1);
     // Buttons built here get nested inside scroll-locked (setScrollFactor(0))
     // menu containers. Phaser's hit-testing for a container's children uses
     // each child's OWN scrollFactor, not the container's -- without setting
