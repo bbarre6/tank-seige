@@ -336,8 +336,15 @@ export class GameScene extends Phaser.Scene {
   }
 
   private createMenuButton(x: number, y: number, label: string, onClick: () => void): { bg: Phaser.GameObjects.Rectangle; text: Phaser.GameObjects.Text } {
-    const text = this.add.text(x, y, label, { fontFamily: "monospace", fontSize: "20px", color: "#ffffff" }).setOrigin(0.5);
-    const bg = this.add.rectangle(x, y, text.width + 32, text.height + 16, 0x2e7d32).setStrokeStyle(2, 0xffffff);
+    const text = this.add.text(x, y, label, { fontFamily: "monospace", fontSize: "20px", color: "#ffffff" }).setOrigin(0.5).setScrollFactor(0);
+    const bg = this.add.rectangle(x, y, text.width + 32, text.height + 16, 0x2e7d32).setStrokeStyle(2, 0xffffff).setScrollFactor(0);
+    // Buttons built here get nested inside scroll-locked (setScrollFactor(0))
+    // menu containers. Phaser's hit-testing for a container's children uses
+    // each child's OWN scrollFactor, not the container's -- without setting
+    // it here too, a click is tested against the un-scrolled world position
+    // while the button renders at a fixed screen position, so the further
+    // the camera has scrolled from the origin, the further off any real
+    // click lands from the button's actual (fixed) hit area.
     bg.setInteractive({ useHandCursor: true });
     bg.on("pointerover", () => bg.setFillStyle(0x388e3c));
     bg.on("pointerout", () => bg.setFillStyle(0x2e7d32));
