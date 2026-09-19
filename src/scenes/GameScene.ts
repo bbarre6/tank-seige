@@ -173,6 +173,11 @@ export class GameScene extends Phaser.Scene {
   private pauseMenuContainer!: Phaser.GameObjects.Container;
   private sessionsMenuContainer!: Phaser.GameObjects.Container;
 
+  private shootButtonBg: Phaser.GameObjects.Rectangle | null = null;
+  private shootButtonText: Phaser.GameObjects.Text | null = null;
+  private deviceChoiceOverlay!: Phaser.GameObjects.Rectangle;
+  private deviceChoiceContainer!: Phaser.GameObjects.Container;
+
   constructor() {
     super("GameScene");
   }
@@ -276,10 +281,11 @@ export class GameScene extends Phaser.Scene {
     // Always-visible on-screen button to open the pause menu -- P is the
     // desktop shortcut, but touch/mobile players have no keyboard at all.
     const pauseButton = this.createMenuButton(width - 60, 30, "Pause", () => this.togglePause());
-    this.pauseButtonBg = pauseButton.bg.setScrollFactor(0).setDepth(2);
-    this.pauseButtonText = pauseButton.text.setScrollFactor(0).setDepth(3);
+    this.pauseButtonBg = pauseButton.bg.setScrollFactor(0).setDepth(2).setVisible(false);
+    this.pauseButtonText = pauseButton.text.setScrollFactor(0).setDepth(3).setVisible(false);
 
     this.setupTouchControls(width);
+    this.setupDeviceChoicePrompt(width, height);
 
     // Desktop: mouse aim only updates on actual mouse movement (not polled
     // every frame), so it doesn't stomp a spacebar auto-aim shot the very
@@ -295,7 +301,7 @@ export class GameScene extends Phaser.Scene {
       }
     });
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
-      if (pointer.x < width / 2 || !this.isDesktopPointer(pointer)) return;
+      if (pointer.x < width / 2 || !this.isDesktopPointer(pointer) || this.isOnShootButton(pointer)) return;
       this.fireToward({ x: pointer.worldX, y: pointer.worldY });
     });
   }
@@ -333,6 +339,55 @@ export class GameScene extends Phaser.Scene {
     this.sessionsMenuContainer.setVisible(false); // always land back on the main pause view
     this.pauseButtonBg.setVisible(!this.isPaused);
     this.pauseButtonText.setVisible(!this.isPaused);
+    this.shootButtonBg?.setVisible(!this.isPaused);
+    this.shootButtonText?.setVisible(!this.isPaused);
+  }
+
+  /**
+   * Shown once, the moment a player joins, so we know whether to add the
+   * dedicated on-screen Shoot button (mobile) or leave firing to Space /
+   * mouse click (desktop). Pauses gameplay until a choice is made.
+   */
+  private setupDeviceChoicePrompt(width: number, height: number): void {
+    this.deviceChoiceOverlay = this.add
+      .rectangle(0, 0, width, height, 0x000000, 0.6)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(20);
+
+    this.deviceChoiceContainer = this.add.container(width / 2, height / 2).setScrollFactor(0).setDepth(21);
+    const prompt = this.add
+      .text(0, -50, "Are you on mobile or computer?", { fontFamily: "monospace", fontSize: "18px", color: "#ffffff" })
+      .setOrigin(0.5);
+    const mobileChoice = this.createMenuButton(-70, 10, "Mobile", () => this.chooseDevice(true));
+    const computerChoice = this.createMenuButton(70, 10, "Computer", () => this.chooseDevice(false));
+    this.deviceChoiceContainer.add([prompt, mobileChoice.bg, mobileChoice.text, computerChoice.bg, computerChoice.text]);
+
+    this.physics.pause();
+    this.time.paused = true;
+  }
+
+  private chooseDevice(isMobile: boolean): void {
+    this.deviceChoiceOverlay.destroy();
+    this.deviceChoiceContainer.destroy();
+
+    this.physics.resume();
+    this.time.paused = false;
+    this.pauseButtonBg.setVisible(true);
+    this.pauseButtonText.setVisible(true);
+
+    if (isMobile) {
+      const { width, height } = this.scale;
+      const shootButton = this.createMenuButton(width - 70, height - 60, "Shoot", () => this.fireAtEnemy());
+      this.shootButtonBg = shootButton.bg.setScrollFactor(0).setDepth(2);
+      this.shootButtonText = shootButton.text.setScrollFactor(0).setDepth(3);
+    }
+  }
+
+  /** Prevents a tap on the Shoot button from also being read as an aim-joystick touch. */
+  private isOnShootButton(pointer: Phaser.Input.Pointer): boolean {
+    if (!this.shootButtonBg || !this.shootButtonBg.visible) return false;
+    return this.shootButtonBg.getBounds().contains(pointer.x, pointer.y);
   }
 
   private createMenuButton(x: number, y: number, label: string, onClick: () => void): { bg: Phaser.GameObjects.Rectangle; text: Phaser.GameObjects.Text } {
@@ -635,7 +690,7 @@ export class GameScene extends Phaser.Scene {
 
   private setupTouchControls(width: number): void {
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
-      if (!pointer.wasTouch) return;
+      if (!pointer.wasTouch || this.isOnShootButton(pointer)) return;
 
       if (pointer.x < width / 2 && this.moveTouchPointerId === null) {
         this.moveTouchPointerId = pointer.id;
