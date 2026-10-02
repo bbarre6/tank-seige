@@ -3,6 +3,9 @@ import type { Vector2 } from "../input/Joystick";
 export const BRAIN_INPUT_SIZE = 12;
 export const BRAIN_HIDDEN_SIZE = 12;
 export const BRAIN_OUTPUT_SIZE = 4; // moveX, moveY, aimX, aimY
+export const BRAIN_MOOD_COUNT = 4;
+export const MOOD_NAMES = ["confident", "mocking", "frustrated", "determined"] as const;
+export type MoodName = (typeof MOOD_NAMES)[number];
 
 const WEIGHT_INIT_RANGE = 0.3; // keeps a fresh brain's tanh units un-saturated at birth
 const WEIGHT_CLAMP = 5; // hard ceiling against runaway growth from many online updates
@@ -46,6 +49,8 @@ export interface SerializedBrainWeights {
   b1: number[];
   w2: number[];
   b2: number[];
+  w2b: number[];
+  b2b: number[];
 }
 
 function isFiniteArray(value: unknown, length: number): value is number[] {
@@ -60,7 +65,9 @@ export function isValidSerializedWeights(value: unknown): value is SerializedBra
     isFiniteArray(data.w1, BRAIN_HIDDEN_SIZE * BRAIN_INPUT_SIZE) &&
     isFiniteArray(data.b1, BRAIN_HIDDEN_SIZE) &&
     isFiniteArray(data.w2, BRAIN_OUTPUT_SIZE * BRAIN_HIDDEN_SIZE) &&
-    isFiniteArray(data.b2, BRAIN_OUTPUT_SIZE)
+    isFiniteArray(data.b2, BRAIN_OUTPUT_SIZE) &&
+    isFiniteArray(data.w2b, BRAIN_MOOD_COUNT * BRAIN_HIDDEN_SIZE) &&
+    isFiniteArray(data.b2b, BRAIN_MOOD_COUNT)
   );
 }
 
@@ -129,6 +136,32 @@ export interface BrainDecision {
   trace: BrainTrace;
 }
 
+/** Result of a mood pick, carrying what reinforceMood() needs to credit it later. */
+export interface MoodDecision {
+  input: Float32Array;
+  moodIndex: number;
+  moodName: MoodName;
+  hidden: Float32Array;
+  probs: Float32Array;
+}
+
+function softmax(logits: Float32Array): Float32Array {
+  const max = Math.max(...logits);
+  const exps = Float32Array.from(logits, (v) => Math.exp(v - max));
+  const sum = exps.reduce((a, b) => a + b, 0);
+  return Float32Array.from(exps, (v) => v / sum);
+}
+
+function sampleCategorical(probs: Float32Array, rng: () => number): number {
+  const roll = rng();
+  let cumulative = 0;
+  for (let i = 0; i < probs.length; i++) {
+    cumulative += probs[i];
+    if (roll < cumulative) return i;
+  }
+  return probs.length - 1; // floating-point fallback
+}
+
 /**
  * A small feedforward "brain" loosely inspired by a fly's visual-motor
  * pathway (motion-sensing inputs -> steering outputs) and reward-gated the
@@ -142,12 +175,15 @@ export interface BrainDecision {
  */
 export class ConnectomeBrain {
   private lastTrace: BrainTrace | null = null;
+  private lastMoodDecision: MoodDecision | null = null;
 
   private constructor(
     private w1: Float32Array,
     private b1: Float32Array,
     private w2: Float32Array,
     private b2: Float32Array,
+    private w2b: Float32Array,
+    private b2b: Float32Array,
     private rng: () => number,
   ) {}
 
@@ -156,30 +192,51 @@ export class ConnectomeBrain {
     const b1 = randomArray(BRAIN_HIDDEN_SIZE, rng, WEIGHT_INIT_RANGE);
     const w2 = randomArray(BRAIN_OUTPUT_SIZE * BRAIN_HIDDEN_SIZE, rng, WEIGHT_INIT_RANGE);
     const b2 = randomArray(BRAIN_OUTPUT_SIZE, rng, WEIGHT_INIT_RANGE);
+    const w2b = randomArray(BRAIN_MOOD_COUNT * BRAIN_HIDDEN_SIZE, rng, WEIGHT_INIT_RANGE);
+    const b2b = randomArray(BRAIN_MOOD_COUNT, rng, WEIGHT_INIT_RANGE);
 
     applyAggressionBias(w1, b1, w2);
 
-    return new ConnectomeBrain(w1, b1, w2, b2, rng);
+    return new ConnectomeBrain(w1, b1, w2, b2, w2b, b2b, rng);
   }
 
   static deserialize(data: SerializedBrainWeights, rng: () => number = Math.random): ConnectomeBrain | null {
     if (!isValidSerializedWeights(data)) return null;
-    return new ConnectomeBrain(Float32Array.from(data.w1), Float32Array.from(data.b1), Float32Array.from(data.w2), Float32Array.from(data.b2), rng);
+    return new ConnectomeBrain(
+      Float32Array.from(data.w1),
+      Float32Array.from(data.b1),
+      Float32Array.from(data.w2),
+      Float32Array.from(data.b2),
+      Float32Array.from(data.w2b),
+      Float32Array.from(data.b2b),
+      rng,
+    );
   }
 
   serialize(): SerializedBrainWeights {
-    return { w1: Array.from(this.w1), b1: Array.from(this.b1), w2: Array.from(this.w2), b2: Array.from(this.b2) };
+    return {
+      w1: Array.from(this.w1),
+      b1: Array.from(this.b1),
+      w2: Array.from(this.w2),
+      b2: Array.from(this.b2),
+      w2b: Array.from(this.w2b),
+      b2b: Array.from(this.b2b),
+    };
   }
 
-  decide(rawInputs: Float32Array): BrainDecision {
-    const input = Float32Array.from(rawInputs, (v) => (Number.isFinite(v) ? v : 0));
-
+  private computeHidden(input: Float32Array): Float32Array {
     const hidden = new Float32Array(BRAIN_HIDDEN_SIZE);
     for (let j = 0; j < BRAIN_HIDDEN_SIZE; j++) {
       let sum = this.b1[j];
       for (let i = 0; i < BRAIN_INPUT_SIZE; i++) sum += this.w1[j * BRAIN_INPUT_SIZE + i] * input[i];
       hidden[j] = Math.tanh(sum);
     }
+    return hidden;
+  }
+
+  decide(rawInputs: Float32Array): BrainDecision {
+    const input = Float32Array.from(rawInputs, (v) => (Number.isFinite(v) ? v : 0));
+    const hidden = this.computeHidden(input);
 
     const mean = new Float32Array(BRAIN_OUTPUT_SIZE);
     for (let k = 0; k < BRAIN_OUTPUT_SIZE; k++) {
@@ -235,6 +292,79 @@ export class ConnectomeBrain {
         this.w2[idx] = clamp(this.w2[idx] + LEARNING_RATE * outputError[k] * hidden[j], -WEIGHT_CLAMP, WEIGHT_CLAMP);
       }
       this.b2[k] = clamp(this.b2[k] + LEARNING_RATE * outputError[k], -WEIGHT_CLAMP, WEIGHT_CLAMP);
+    }
+
+    for (let j = 0; j < BRAIN_HIDDEN_SIZE; j++) {
+      for (let i = 0; i < BRAIN_INPUT_SIZE; i++) {
+        const idx = j * BRAIN_INPUT_SIZE + i;
+        this.w1[idx] = clamp(this.w1[idx] + LEARNING_RATE * hiddenError[j] * input[i], -WEIGHT_CLAMP, WEIGHT_CLAMP);
+      }
+      this.b1[j] = clamp(this.b1[j] + LEARNING_RATE * hiddenError[j], -WEIGHT_CLAMP, WEIGHT_CLAMP);
+    }
+  }
+
+  /**
+   * Picks a "mood" via a second output head sharing the same hidden layer as
+   * decide()'s movement/aim outputs -- a real part of the same brain, not a
+   * bolted-on separate system. Called fresh at the moment a chat line is
+   * needed (not tied to decide()'s periodic cadence), so mood reflects the
+   * situation right then.
+   */
+  decideMood(rawInputs: Float32Array): MoodDecision {
+    const input = Float32Array.from(rawInputs, (v) => (Number.isFinite(v) ? v : 0));
+    const hidden = this.computeHidden(input);
+
+    const logits = new Float32Array(BRAIN_MOOD_COUNT);
+    for (let m = 0; m < BRAIN_MOOD_COUNT; m++) {
+      let sum = this.b2b[m];
+      for (let j = 0; j < BRAIN_HIDDEN_SIZE; j++) sum += this.w2b[m * BRAIN_HIDDEN_SIZE + j] * hidden[j];
+      logits[m] = sum;
+    }
+
+    const probs = softmax(logits);
+    const moodIndex = sampleCategorical(probs, this.rng);
+
+    const decision: MoodDecision = { input, moodIndex, moodName: MOOD_NAMES[moodIndex], hidden, probs };
+    this.lastMoodDecision = decision;
+    return decision;
+  }
+
+  /**
+   * Categorical-policy-gradient update for the mood head, defaulting to the
+   * most recent decideMood() call (mirrors reinforce()'s trace default).
+   * Standard softmax REINFORCE: push the chosen mood's logit up on a
+   * positive reward (down on a negative one), proportional to how
+   * surprising that choice was. Then backprop into the SAME shared hidden
+   * layer that movement/aim also use, so a hit/miss shapes one brain, not
+   * two independent ones.
+   */
+  reinforceMood(reward: number, decision: MoodDecision | null = this.lastMoodDecision): void {
+    if (!decision || !Number.isFinite(reward)) return;
+
+    const { input, moodIndex, hidden, probs } = decision;
+
+    const gradient = new Float32Array(BRAIN_MOOD_COUNT);
+    for (let m = 0; m < BRAIN_MOOD_COUNT; m++) {
+      gradient[m] = reward * ((m === moodIndex ? 1 : 0) - probs[m]);
+    }
+
+    // Backprop into the hidden layer using the PRE-update w2b.
+    const hiddenError = new Float32Array(BRAIN_HIDDEN_SIZE);
+    for (let m = 0; m < BRAIN_MOOD_COUNT; m++) {
+      for (let j = 0; j < BRAIN_HIDDEN_SIZE; j++) {
+        hiddenError[j] += gradient[m] * this.w2b[m * BRAIN_HIDDEN_SIZE + j];
+      }
+    }
+    for (let j = 0; j < BRAIN_HIDDEN_SIZE; j++) {
+      hiddenError[j] *= 1 - hidden[j] * hidden[j];
+    }
+
+    for (let m = 0; m < BRAIN_MOOD_COUNT; m++) {
+      for (let j = 0; j < BRAIN_HIDDEN_SIZE; j++) {
+        const idx = m * BRAIN_HIDDEN_SIZE + j;
+        this.w2b[idx] = clamp(this.w2b[idx] + LEARNING_RATE * gradient[m] * hidden[j], -WEIGHT_CLAMP, WEIGHT_CLAMP);
+      }
+      this.b2b[m] = clamp(this.b2b[m] + LEARNING_RATE * gradient[m], -WEIGHT_CLAMP, WEIGHT_CLAMP);
     }
 
     for (let j = 0; j < BRAIN_HIDDEN_SIZE; j++) {

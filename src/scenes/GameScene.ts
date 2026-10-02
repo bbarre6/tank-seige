@@ -6,6 +6,7 @@ import { ensureTankTextures, ensureEnemyTankTextures } from "../gameplay/render/
 import { ensureGroundTexture } from "../gameplay/render/GroundTexture";
 import { ConnectomeBrain, buildEnemyBrainInputs, BRAIN_INPUT_SIZE, type BrainDecision, type BrainTrace } from "../gameplay/ai/ConnectomeBrain";
 import { loadBrainBaseline, saveBrainBaseline, type StoredBrainBaseline } from "../gameplay/ai/BrainPersistence";
+import { pickChatLine, type ChatEventType } from "../gameplay/ai/EnemyChat";
 
 const TANK_SPEED = 220; // px/s
 const TANK_SCALE = 1.5;
@@ -32,6 +33,11 @@ const ENEMY_RESPAWN_DELAY_MS = 1500; // delay before a replacement spawns in to 
 const ENEMY_BRAIN_DECISION_INTERVAL_MS = 150; // how often each enemy's brain re-samples a new move/aim action
 const ENEMY_BRAIN_REWARD_HIT = 1;
 const ENEMY_BRAIN_REWARD_MISS = -0.3; // smaller than a hit's reward -- misses vastly outnumber hits early on
+
+const ENEMY_CHAT_COOLDOWN_MS = 8000; // one line per enemy per window, comfortably longer than the display time
+const CHAT_BUBBLE_DISPLAY_MS = 5000;
+const ENEMY_IDLE_CHAT_MIN_MS = 8000;
+const ENEMY_IDLE_CHAT_MAX_MS = 15000;
 
 const PROJECTILE_LIFESPAN_MS = 1500;
 
@@ -126,6 +132,10 @@ interface EnemyInstance {
   lastDecisionAt: number;
   currentAction: BrainDecision;
   lifetimeReward: number;
+  chatBubbleBg: Phaser.GameObjects.Rectangle | null;
+  chatBubbleText: Phaser.GameObjects.Text | null;
+  lastChatAt: number;
+  nextIdleChatDelayMs: number;
 }
 
 /**
@@ -657,10 +667,13 @@ export class GameScene extends Phaser.Scene {
     const instance: EnemyInstance = {
       hull, turret, healthText, health, tier, lastFiredAt: 0,
       brain, currentAction, lastDecisionAt: 0, lifetimeReward: 0,
+      chatBubbleBg: null, chatBubbleText: null, lastChatAt: 0,
+      nextIdleChatDelayMs: Phaser.Math.Between(ENEMY_IDLE_CHAT_MIN_MS, ENEMY_IDLE_CHAT_MAX_MS),
     };
     (hull as unknown as { enemyInstance: EnemyInstance }).enemyInstance = instance;
 
     this.enemies.push(instance);
+    this.triggerEnemyChat(instance, "spawn");
     return instance;
   }
 
@@ -704,6 +717,12 @@ export class GameScene extends Phaser.Scene {
       enemy.turret.setPosition(enemy.hull.x, enemy.hull.y);
       enemy.turret.rotation = Math.atan2(aim.y, aim.x);
       enemy.healthText.setPosition(enemy.hull.x, enemy.hull.y - 32);
+      enemy.chatBubbleBg?.setPosition(enemy.hull.x, enemy.hull.y - 56);
+      enemy.chatBubbleText?.setPosition(enemy.hull.x, enemy.hull.y - 56);
+
+      if (now - enemy.lastChatAt >= enemy.nextIdleChatDelayMs) {
+        this.triggerEnemyChat(enemy, "idle");
+      }
 
       if (now - enemy.lastFiredAt < enemy.tier.fireCooldownMs) continue;
       enemy.lastFiredAt = now;
@@ -736,6 +755,75 @@ export class GameScene extends Phaser.Scene {
     const reward = hit ? ENEMY_BRAIN_REWARD_HIT : ENEMY_BRAIN_REWARD_MISS;
     firedBy.brain.reinforce(reward, trace);
     firedBy.lifetimeReward += reward;
+    this.triggerEnemyChat(firedBy, hit ? "hit" : "miss", reward);
+  }
+
+  /**
+   * Has `enemy` pick a mood (via the same brain that drives its movement/aim)
+   * and say a line for `eventType`, as long as its per-enemy chat cooldown
+   * has elapsed. When `reward` is given (hit/miss only -- there's no combat
+   * outcome to credit for spawn/death/idle chatter), that reward also
+   * reinforces the mood pick, same as it already reinforces movement/aim.
+   */
+  private triggerEnemyChat(enemy: EnemyInstance, eventType: ChatEventType, reward?: number): void {
+    const now = this.time.now;
+    if (now - enemy.lastChatAt < ENEMY_CHAT_COOLDOWN_MS) return;
+    // A miss resolves on a delayed timer (PROJECTILE_LIFESPAN_MS after firing), so the
+    // firing enemy may have already been killed and had its hull destroyed by then --
+    // its body is torn down with it, so bail out rather than read a dead reference.
+    if (!enemy.hull.body) return;
+
+    const dx = this.tank.x - enemy.hull.x;
+    const dy = this.tank.y - enemy.hull.y;
+    const distance = Math.hypot(dx, dy);
+    const toPlayer = distance > 0 ? { x: dx / distance, y: dy / distance } : { x: 1, y: 0 };
+    const enemyVelocity = enemy.hull.body.velocity;
+    const playerVelocity = this.tank.body.velocity;
+    const inputs = buildEnemyBrainInputs({
+      toPlayer,
+      distance,
+      preferredDistance: ENEMY_PREFERRED_DISTANCE,
+      playerVelocity: { x: playerVelocity.x, y: playerVelocity.y },
+      enemyVelocity: { x: enemyVelocity.x, y: enemyVelocity.y },
+      maxPlayerSpeed: TANK_SPEED,
+      maxEnemySpeed: enemy.tier.speed,
+    });
+
+    const decision = enemy.brain.decideMood(inputs);
+    if (reward !== undefined) {
+      enemy.brain.reinforceMood(reward, decision);
+    }
+
+    this.showChatBubble(enemy, pickChatLine(eventType, decision.moodName));
+
+    enemy.lastChatAt = now;
+    enemy.nextIdleChatDelayMs = Phaser.Math.Between(ENEMY_IDLE_CHAT_MIN_MS, ENEMY_IDLE_CHAT_MAX_MS);
+  }
+
+  /** Shows `text` in a bubble above `enemy` for CHAT_BUBBLE_DISPLAY_MS, following it while alive. */
+  private showChatBubble(enemy: EnemyInstance, text: string): void {
+    enemy.chatBubbleBg?.destroy();
+    enemy.chatBubbleText?.destroy();
+
+    const bubbleText = this.add
+      .text(enemy.hull.x, enemy.hull.y - 56, text, { fontFamily: "monospace", fontSize: "12px", color: "#ffffff" })
+      .setOrigin(0.5)
+      .setDepth(4);
+    const bubbleBg = this.add
+      .rectangle(enemy.hull.x, enemy.hull.y - 56, bubbleText.width + 12, bubbleText.height + 8, 0x1a1a1a, 0.85)
+      .setStrokeStyle(1, 0xffffff)
+      .setDepth(3);
+
+    enemy.chatBubbleBg = bubbleBg;
+    enemy.chatBubbleText = bubbleText;
+
+    this.time.delayedCall(CHAT_BUBBLE_DISPLAY_MS, () => {
+      if (enemy.chatBubbleBg !== bubbleBg) return; // already replaced by a newer line
+      bubbleBg.destroy();
+      bubbleText.destroy();
+      enemy.chatBubbleBg = null;
+      enemy.chatBubbleText = null;
+    });
   }
 
   private setupTouchControls(width: number): void {
@@ -841,6 +929,7 @@ export class GameScene extends Phaser.Scene {
     if (!instance.health.isDead) return;
 
     this.enemies.splice(index, 1);
+    this.triggerEnemyChat(instance, "death"); // before destroy() -- needs the hull's position
     instance.hull.destroy();
     instance.turret.destroy();
     instance.healthText.destroy();

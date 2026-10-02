@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   BRAIN_HIDDEN_SIZE,
   BRAIN_INPUT_SIZE,
+  BRAIN_MOOD_COUNT,
   BRAIN_OUTPUT_SIZE,
+  MOOD_NAMES,
   ConnectomeBrain,
   buildEnemyBrainInputs,
   type SerializedBrainWeights,
@@ -26,6 +28,8 @@ function zeroWeights(): SerializedBrainWeights {
     b1: new Array(BRAIN_HIDDEN_SIZE).fill(0),
     w2: new Array(BRAIN_OUTPUT_SIZE * BRAIN_HIDDEN_SIZE).fill(0),
     b2: new Array(BRAIN_OUTPUT_SIZE).fill(0),
+    w2b: new Array(BRAIN_MOOD_COUNT * BRAIN_HIDDEN_SIZE).fill(0),
+    b2b: new Array(BRAIN_MOOD_COUNT).fill(0),
   };
 }
 
@@ -53,6 +57,8 @@ describe("ConnectomeBrain", () => {
       b1: new Array(BRAIN_HIDDEN_SIZE).fill(999),
       w2: new Array(BRAIN_OUTPUT_SIZE * BRAIN_HIDDEN_SIZE).fill(999),
       b2: new Array(BRAIN_OUTPUT_SIZE).fill(999),
+      w2b: new Array(BRAIN_MOOD_COUNT * BRAIN_HIDDEN_SIZE).fill(999),
+      b2b: new Array(BRAIN_MOOD_COUNT).fill(999),
     };
     const brain = ConnectomeBrain.deserialize(huge, NO_RANDOMNESS_RNG);
     expect(brain).not.toBeNull();
@@ -179,6 +185,78 @@ describe("ConnectomeBrain", () => {
 
     // Assert
     expect(result).toBeNull();
+  });
+
+  it("decideMood() returns a valid probability distribution over all moods", () => {
+    // Arrange
+    const brain = ConnectomeBrain.createRandom(sequenceRng([0.5, 0.1, 0.9, 0.3]));
+
+    // Act
+    const { probs, moodName } = brain.decideMood(new Float32Array(BRAIN_INPUT_SIZE).fill(0.2));
+
+    // Assert
+    expect(probs.length).toBe(BRAIN_MOOD_COUNT);
+    expect(probs.every((p) => p >= 0)).toBe(true);
+    expect(Math.abs(probs.reduce((a, b) => a + b, 0) - 1)).toBeLessThan(1e-5);
+    expect(MOOD_NAMES).toContain(moodName);
+  });
+
+  it("a positive reward raises the reinforced mood's probability", () => {
+    // Arrange: all-zero weights -> uniform mood probabilities; a fixed roll always selects mood 0.
+    const brain = ConnectomeBrain.deserialize(zeroWeights(), sequenceRng([0.1]))!;
+    const inputs = new Float32Array(BRAIN_INPUT_SIZE);
+    const decision = brain.decideMood(inputs);
+    expect(decision.moodIndex).toBe(0);
+    expect(decision.probs[0]).toBeCloseTo(0.25, 5);
+
+    // Act
+    brain.reinforceMood(1, decision);
+    const after = brain.decideMood(inputs);
+
+    // Assert
+    expect(after.probs[0]).toBeGreaterThan(0.25);
+  });
+
+  it("a negative reward lowers the reinforced mood's probability", () => {
+    // Arrange (mirrors the positive-reward test above)
+    const brain = ConnectomeBrain.deserialize(zeroWeights(), sequenceRng([0.1]))!;
+    const inputs = new Float32Array(BRAIN_INPUT_SIZE);
+    const decision = brain.decideMood(inputs);
+
+    // Act
+    brain.reinforceMood(-1, decision);
+    const after = brain.decideMood(inputs);
+
+    // Assert
+    expect(after.probs[0]).toBeLessThan(0.25);
+  });
+
+  it("reinforceMood() with no decision argument defaults to the most recent decideMood() call", () => {
+    // Arrange
+    const brain = ConnectomeBrain.deserialize(zeroWeights(), sequenceRng([0.1]))!;
+    const inputs = new Float32Array(BRAIN_INPUT_SIZE);
+    brain.decideMood(inputs);
+
+    // Act
+    brain.reinforceMood(1);
+    const after = brain.decideMood(inputs);
+
+    // Assert
+    expect(after.probs[0]).toBeGreaterThan(0.25);
+  });
+
+  it("serialize()/deserialize() round-trips the mood head weights too", () => {
+    // Arrange
+    const brain = ConnectomeBrain.createRandom(sequenceRng([0.2, 0.4, 0.6, 0.8]));
+    const serialized = brain.serialize();
+
+    // Act
+    const restored = ConnectomeBrain.deserialize(serialized);
+
+    // Assert
+    expect(restored).not.toBeNull();
+    expect(restored!.serialize().w2b).toEqual(serialized.w2b);
+    expect(restored!.serialize().b2b).toEqual(serialized.b2b);
   });
 });
 

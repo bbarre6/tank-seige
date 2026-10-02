@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadBrainBaseline, saveBrainBaseline, type StoredBrainBaseline } from "./BrainPersistence";
-import { BRAIN_HIDDEN_SIZE, BRAIN_INPUT_SIZE, BRAIN_OUTPUT_SIZE, type SerializedBrainWeights } from "./ConnectomeBrain";
+import { BRAIN_HIDDEN_SIZE, BRAIN_INPUT_SIZE, BRAIN_MOOD_COUNT, BRAIN_OUTPUT_SIZE, type SerializedBrainWeights } from "./ConnectomeBrain";
 
 function fakeWeights(): SerializedBrainWeights {
   return {
@@ -8,6 +8,8 @@ function fakeWeights(): SerializedBrainWeights {
     b1: new Array(BRAIN_HIDDEN_SIZE).fill(0.1),
     w2: new Array(BRAIN_OUTPUT_SIZE * BRAIN_HIDDEN_SIZE).fill(0.1),
     b2: new Array(BRAIN_OUTPUT_SIZE).fill(0.1),
+    w2b: new Array(BRAIN_MOOD_COUNT * BRAIN_HIDDEN_SIZE).fill(0.1),
+    b2b: new Array(BRAIN_MOOD_COUNT).fill(0.1),
   };
 }
 
