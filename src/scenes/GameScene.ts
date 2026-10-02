@@ -4,6 +4,8 @@ import { spawnProjectile } from "../gameplay/combat/Projectile";
 import { Health } from "../gameplay/combat/Health";
 import { ensureTankTextures, ensureEnemyTankTextures } from "../gameplay/render/TankTextures";
 import { ensureGroundTexture } from "../gameplay/render/GroundTexture";
+import { ConnectomeBrain, buildEnemyBrainInputs, BRAIN_INPUT_SIZE, type BrainDecision, type BrainTrace } from "../gameplay/ai/ConnectomeBrain";
+import { loadBrainBaseline, saveBrainBaseline, type StoredBrainBaseline } from "../gameplay/ai/BrainPersistence";
 
 const TANK_SPEED = 220; // px/s
 const TANK_SCALE = 1.5;
@@ -24,9 +26,12 @@ const SPACE_FIRE_COOLDOWN_MS = 300; // separate cap on the spacebar auto-fire sh
 
 const ENEMY_PROJECTILE_SPEED = 260;
 const ENEMY_PROJECTILE_DAMAGE_FALLBACK = 5;
-const ENEMY_PREFERRED_DISTANCE = 260; // holds roughly this far from the player to shoot from
-const ENEMY_DISTANCE_DEADZONE = 20;
+const ENEMY_PREFERRED_DISTANCE = 260; // holds roughly this far from the player to shoot from; brain input, no longer hard-enforced
 const ENEMY_RESPAWN_DELAY_MS = 1500; // delay before a replacement spawns in to keep the current wave topped up
+
+const ENEMY_BRAIN_DECISION_INTERVAL_MS = 150; // how often each enemy's brain re-samples a new move/aim action
+const ENEMY_BRAIN_REWARD_HIT = 1;
+const ENEMY_BRAIN_REWARD_MISS = -0.3; // smaller than a hit's reward -- misses vastly outnumber hits early on
 
 const PROJECTILE_LIFESPAN_MS = 1500;
 
@@ -117,6 +122,10 @@ interface EnemyInstance {
   health: Health;
   tier: EnemyTier;
   lastFiredAt: number;
+  brain: ConnectomeBrain;
+  lastDecisionAt: number;
+  currentAction: BrainDecision;
+  lifetimeReward: number;
 }
 
 /**
@@ -527,6 +536,7 @@ export class GameScene extends Phaser.Scene {
       enemy.hull.destroy();
       enemy.turret.destroy();
       enemy.healthText.destroy();
+      this.maybePromoteBrainBaseline(enemy); // don't lose a straggler's learning just because the level cleared
     }
     this.enemies = [];
   }
@@ -640,7 +650,14 @@ export class GameScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setDepth(2);
 
-    const instance: EnemyInstance = { hull, turret, healthText, health, tier, lastFiredAt: 0 };
+    const baseline = loadBrainBaseline();
+    const brain = (baseline && ConnectomeBrain.deserialize(baseline.weights)) ?? ConnectomeBrain.createRandom();
+    const currentAction = brain.decide(new Float32Array(BRAIN_INPUT_SIZE));
+
+    const instance: EnemyInstance = {
+      hull, turret, healthText, health, tier, lastFiredAt: 0,
+      brain, currentAction, lastDecisionAt: 0, lifetimeReward: 0,
+    };
     (hull as unknown as { enemyInstance: EnemyInstance }).enemyInstance = instance;
 
     this.enemies.push(instance);
@@ -659,33 +676,66 @@ export class GameScene extends Phaser.Scene {
       const toPlayer = { x: dx / distance, y: dy / distance };
       const speed = enemy.tier.speed;
 
-      if (distance > ENEMY_PREFERRED_DISTANCE + ENEMY_DISTANCE_DEADZONE) {
-        enemy.hull.body.setVelocity(toPlayer.x * speed, toPlayer.y * speed);
-        enemy.hull.rotation = Math.atan2(toPlayer.y, toPlayer.x);
-      } else if (distance < ENEMY_PREFERRED_DISTANCE - ENEMY_DISTANCE_DEADZONE) {
-        enemy.hull.body.setVelocity(-toPlayer.x * speed, -toPlayer.y * speed);
-        enemy.hull.rotation = Math.atan2(-toPlayer.y, -toPlayer.x);
-      } else {
-        enemy.hull.body.setVelocity(0, 0);
+      // The enemy's brain decides where to move and where to aim; re-sampled
+      // periodically (not every frame) so held actions read as purposeful
+      // motion rather than jitter. Firing stays gated by the tier's own
+      // fireCooldownMs below, unchanged from before this brain existed.
+      if (now - enemy.lastDecisionAt >= ENEMY_BRAIN_DECISION_INTERVAL_MS) {
+        enemy.lastDecisionAt = now;
+        const enemyVelocity = enemy.hull.body.velocity;
+        const playerVelocity = this.tank.body.velocity;
+        const inputs = buildEnemyBrainInputs({
+          toPlayer,
+          distance,
+          preferredDistance: ENEMY_PREFERRED_DISTANCE,
+          playerVelocity: { x: playerVelocity.x, y: playerVelocity.y },
+          enemyVelocity: { x: enemyVelocity.x, y: enemyVelocity.y },
+          maxPlayerSpeed: TANK_SPEED,
+          maxEnemySpeed: enemy.tier.speed,
+        });
+        enemy.currentAction = enemy.brain.decide(inputs);
       }
 
-      // Turret always tracks the player, independent of hull facing.
+      const { move, aim } = enemy.currentAction;
+      enemy.hull.body.setVelocity(move.x * speed, move.y * speed);
+      enemy.hull.rotation = Math.atan2(move.y, move.x);
+
+      // Turret always tracks the brain's aim direction, independent of hull facing.
       enemy.turret.setPosition(enemy.hull.x, enemy.hull.y);
-      enemy.turret.rotation = Math.atan2(toPlayer.y, toPlayer.x);
+      enemy.turret.rotation = Math.atan2(aim.y, aim.x);
       enemy.healthText.setPosition(enemy.hull.x, enemy.hull.y - 32);
 
       if (now - enemy.lastFiredAt < enemy.tier.fireCooldownMs) continue;
       enemy.lastFiredAt = now;
 
-      const spawn = spawnProjectile({ x: enemy.hull.x, y: enemy.hull.y }, toPlayer, ENEMY_PROJECTILE_SPEED, enemy.tier.damage);
+      const spawn = spawnProjectile({ x: enemy.hull.x, y: enemy.hull.y }, aim, ENEMY_PROJECTILE_SPEED, enemy.tier.damage);
       const projectile = this.add.circle(spawn.x, spawn.y, 5, enemy.tier.tint);
       this.enemyProjectiles.add(projectile);
       const body = projectile.body as Phaser.Physics.Arcade.Body;
       body.setVelocity(spawn.velocityX, spawn.velocityY);
       (projectile as unknown as { damage: number }).damage = spawn.damage;
+      (projectile as unknown as { firedBy: EnemyInstance }).firedBy = enemy;
+      (projectile as unknown as { firingTrace: BrainTrace }).firingTrace = enemy.currentAction.trace;
+      (projectile as unknown as { hit: boolean }).hit = false;
 
-      this.time.delayedCall(PROJECTILE_LIFESPAN_MS, () => projectile.destroy());
+      this.time.delayedCall(PROJECTILE_LIFESPAN_MS, () => {
+        if (!(projectile as unknown as { hit?: boolean }).hit) {
+          this.resolveEnemyShotReward(projectile, false);
+        }
+        projectile.destroy();
+      });
     }
+  }
+
+  /** Routes a fired shot's outcome (hit or miss) back to the firing enemy's brain as a reward. */
+  private resolveEnemyShotReward(projectile: Phaser.GameObjects.GameObject, hit: boolean): void {
+    const firedBy = (projectile as unknown as { firedBy?: EnemyInstance }).firedBy;
+    const trace = (projectile as unknown as { firingTrace?: BrainTrace }).firingTrace;
+    if (!firedBy || !trace) return;
+
+    const reward = hit ? ENEMY_BRAIN_REWARD_HIT : ENEMY_BRAIN_REWARD_MISS;
+    firedBy.brain.reinforce(reward, trace);
+    firedBy.lifetimeReward += reward;
   }
 
   private setupTouchControls(width: number): void {
@@ -794,6 +844,7 @@ export class GameScene extends Phaser.Scene {
     instance.hull.destroy();
     instance.turret.destroy();
     instance.healthText.destroy();
+    this.maybePromoteBrainBaseline(instance);
 
     this.coins += instance.tier.coinReward;
     this.coinsText.setText(`Coins: ${this.coins}`);
@@ -817,6 +868,8 @@ export class GameScene extends Phaser.Scene {
 
   private handlePlayerHit(projectile: Phaser.GameObjects.Arc): void {
     const damage = (projectile as unknown as { damage: number }).damage ?? ENEMY_PROJECTILE_DAMAGE_FALLBACK;
+    (projectile as unknown as { hit: boolean }).hit = true;
+    this.resolveEnemyShotReward(projectile, true);
     projectile.destroy();
 
     this.playerHealth.takeDamage(damage);
@@ -826,5 +879,20 @@ export class GameScene extends Phaser.Scene {
       this.playerHealth.reset();
       this.playerHealthText.setText(`HP: ${this.playerHealth.value}`);
     }
+  }
+
+  /**
+   * Called whenever an enemy stops being updated (death, or level-clear
+   * cleanup). Re-reads the shared baseline fresh (not a spawn-time cache) so
+   * two enemies dying close together compare against each other correctly;
+   * if this enemy's own online learning beat the current best, its weights
+   * become the new baseline that every future spawn seeds from.
+   */
+  private maybePromoteBrainBaseline(instance: EnemyInstance): void {
+    const currentBaseline = loadBrainBaseline();
+    if (currentBaseline !== null && instance.lifetimeReward <= currentBaseline.score) return;
+
+    const promoted: StoredBrainBaseline = { weights: instance.brain.serialize(), score: instance.lifetimeReward };
+    saveBrainBaseline(promoted);
   }
 }
