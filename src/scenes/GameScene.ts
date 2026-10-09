@@ -21,10 +21,9 @@ import { pickChatLine, type ChatEventType } from "../gameplay/ai/EnemyChat";
 const TANK_SPEED = 220; // px/s
 const TANK_SCALE = 1.5;
 
-// Each Fire Rate level mounts another turret on the player's tank, visibly
-// telegraphing the upgrade -- capped at 5 regardless of the upgrade's own
-// max level, so buying the last level or two of Fire Rate no longer adds a
-// new barrel, just keeps the existing 5-gun battery but faster.
+// Each Multi Turret level mounts another turret on the player's tank, each
+// firing its own projectile -- the upgrade's own max level (4) plus the base
+// turret exactly reaches MAX_PLAYER_TURRETS, so the cap is never reached early.
 const BASE_TURRET_COUNT = 1;
 const MAX_PLAYER_TURRETS = 5;
 const TURRET_SPACING = 20; // unscaled design px between adjacent turrets; scaled by TANK_SCALE at render time -- must clear the ~16px-wide turret base (see drawTurretTexture) or extra turrets overlap into an unreadable blob
@@ -294,7 +293,7 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.startFollow(this.tank, true, 0.08, 0.08);
     this.cameras.main.setDeadzone(width * 0.5, height * 0.5);
 
-    this.rebuildPlayerTurrets(); // count reflects any already-owned Fire Rate levels
+    this.rebuildPlayerTurrets(); // count reflects any already-owned Multi Turret levels
 
     this.playerHealthText = this.add
       .text(16, 16, `HP: ${this.playerHealth.value}`, {
@@ -667,7 +666,7 @@ export class GameScene extends Phaser.Scene {
     if (id === "maxHealth") {
       this.playerHealth.increaseMax(def.perLevel);
       this.playerHealthText.setText(`HP: ${this.playerHealth.value}`);
-    } else if (id === "fireRate") {
+    } else if (id === "multiTurret") {
       this.rebuildPlayerTurrets();
     }
 
@@ -816,7 +815,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     // Turrets aim independently of the hull (AC-1.1.2), arranged side by
-    // side (one per Fire Rate level, see rebuildPlayerTurrets) so they all
+    // side (one per Multi Turret level, see rebuildPlayerTurrets) so they all
     // rotate together to track the current aim direction.
     const angle = Math.atan2(this.tankFacing.y, this.tankFacing.x);
     const offsets = turretOffsets(this.turretSprites.length, TURRET_SPACING * TANK_SCALE);
@@ -827,11 +826,11 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  /** (Re)builds the player's turret sprites to match the current Fire Rate level (capped at MAX_PLAYER_TURRETS). */
+  /** (Re)builds the player's turret sprites to match the current Multi Turret level (capped at MAX_PLAYER_TURRETS). */
   private rebuildPlayerTurrets(): void {
     for (const turret of this.turretSprites) turret.destroy();
 
-    const count = Math.min(BASE_TURRET_COUNT + this.upgradeLevels.fireRate, MAX_PLAYER_TURRETS);
+    const count = Math.min(BASE_TURRET_COUNT + this.upgradeLevels.multiTurret, MAX_PLAYER_TURRETS);
     this.turretSprites = [];
     for (let i = 0; i < count; i++) {
       this.turretSprites.push(this.add.image(this.tank.x, this.tank.y, this.turretKey).setScale(TANK_SCALE).setDepth(1));
@@ -1132,14 +1131,20 @@ export class GameScene extends Phaser.Scene {
 
     this.lastFiredAt = now;
 
-    const spawn = spawnProjectile({ x: this.tank.x, y: this.tank.y }, aim, PLAYER_PROJECTILE_SPEED, this.playerDamage);
-    const projectile = this.add.circle(spawn.x, spawn.y, 5, 0xffeb3b);
-    this.playerProjectiles.add(projectile);
-    const body = projectile.body as Phaser.Physics.Arcade.Body;
-    body.setVelocity(spawn.velocityX, spawn.velocityY);
-    (projectile as unknown as { damage: number }).damage = spawn.damage;
+    // One projectile per mounted turret (US-1.4 Multi Turret), each fired from
+    // that turret's own position so a 5-gun battery actually spreads its fire.
+    const offsets = turretOffsets(this.turretSprites.length, TURRET_SPACING * TANK_SCALE);
+    for (const offset of offsets) {
+      const origin = turretPosition(this.tank, aim, offset);
+      const spawn = spawnProjectile(origin, aim, PLAYER_PROJECTILE_SPEED, this.playerDamage);
+      const projectile = this.add.circle(spawn.x, spawn.y, 5, 0xffeb3b);
+      this.playerProjectiles.add(projectile);
+      const body = projectile.body as Phaser.Physics.Arcade.Body;
+      body.setVelocity(spawn.velocityX, spawn.velocityY);
+      (projectile as unknown as { damage: number }).damage = spawn.damage;
 
-    this.time.delayedCall(PROJECTILE_LIFESPAN_MS, () => projectile.destroy());
+      this.time.delayedCall(PROJECTILE_LIFESPAN_MS, () => projectile.destroy());
+    }
   }
 
   private handleEnemyHit(projectile: Phaser.GameObjects.Arc, enemyHull: Phaser.GameObjects.GameObject): void {

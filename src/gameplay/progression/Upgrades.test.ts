@@ -79,7 +79,7 @@ describe("parseUpgradeLevels", () => {
     const levels = parseUpgradeLevels(raw);
 
     // Assert
-    expect(levels).toEqual({ damage: 2, fireRate: 1, moveSpeed: 0, maxHealth: 3 });
+    expect(levels).toEqual({ damage: 2, fireRate: 1, moveSpeed: 0, maxHealth: 3, multiTurret: 0 });
   });
 
   it("falls back to 0 for a level above that upgrade's max", () => {
@@ -109,6 +109,6 @@ describe("parseUpgradeLevels", () => {
     const levels = parseUpgradeLevels(raw);
 
     // Assert
-    expect(levels).toEqual({ damage: 1, fireRate: 0, moveSpeed: 0, maxHealth: 0 });
+    expect(levels).toEqual({ damage: 1, fireRate: 0, moveSpeed: 0, maxHealth: 0, multiTurret: 0 });
   });
 });

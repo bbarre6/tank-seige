@@ -3,7 +3,7 @@
  * agnostic (no Phaser/DOM) so balancing is just editing numbers here, and the
  * cost/level math is unit-testable without booting a scene.
  */
-export type UpgradeId = "damage" | "fireRate" | "moveSpeed" | "maxHealth";
+export type UpgradeId = "damage" | "fireRate" | "moveSpeed" | "maxHealth" | "multiTurret";
 
 export interface UpgradeDef {
   id: UpgradeId;
@@ -15,7 +15,7 @@ export interface UpgradeDef {
   perLevel: number; // amount added to the base stat per level (negative = reduces, e.g. fire cooldown)
 }
 
-export const UPGRADE_IDS: readonly UpgradeId[] = ["damage", "fireRate", "moveSpeed", "maxHealth"];
+export const UPGRADE_IDS: readonly UpgradeId[] = ["damage", "fireRate", "moveSpeed", "maxHealth", "multiTurret"];
 
 export const UPGRADE_DEFS: Record<UpgradeId, UpgradeDef> = {
   damage: {
@@ -54,6 +54,15 @@ export const UPGRADE_DEFS: Record<UpgradeId, UpgradeDef> = {
     costGrowth: 1.6,
     perLevel: 20,
   },
+  multiTurret: {
+    id: "multiTurret",
+    label: "Multi Turret",
+    description: "+1 turret per level, each firing its own projectile",
+    maxLevel: 4,
+    baseCost: 100,
+    costGrowth: 1.8,
+    perLevel: 1,
+  },
 };
 
 export const UPGRADE_LIST: readonly UpgradeDef[] = UPGRADE_IDS.map((id) => UPGRADE_DEFS[id]);
@@ -61,7 +70,7 @@ export const UPGRADE_LIST: readonly UpgradeDef[] = UPGRADE_IDS.map((id) => UPGRA
 export type UpgradeLevels = Record<UpgradeId, number>;
 
 export function defaultUpgradeLevels(): UpgradeLevels {
-  return { damage: 0, fireRate: 0, moveSpeed: 0, maxHealth: 0 };
+  return { damage: 0, fireRate: 0, moveSpeed: 0, maxHealth: 0, multiTurret: 0 };
 }
 
 /** The coin cost to buy the NEXT level of this upgrade, or null once it's maxed out (AC-1.4.1, AC-1.4.3). */
