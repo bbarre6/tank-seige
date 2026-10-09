@@ -4,6 +4,7 @@ import { spawnProjectile } from "../gameplay/combat/Projectile";
 import { Health } from "../gameplay/combat/Health";
 import { ensureTankTextures, ensureEnemyTankTextures } from "../gameplay/render/TankTextures";
 import { ensureGroundTexture } from "../gameplay/render/GroundTexture";
+import { turretOffsets, turretPosition } from "../gameplay/render/TurretLayout";
 import {
   UPGRADE_DEFS,
   UPGRADE_LIST,
@@ -16,6 +17,14 @@ import {
 
 const TANK_SPEED = 220; // px/s
 const TANK_SCALE = 1.5;
+
+// Each Fire Rate level mounts another turret on the player's tank, visibly
+// telegraphing the upgrade -- capped at 5 regardless of the upgrade's own
+// max level, so buying the last level or two of Fire Rate no longer adds a
+// new barrel, just keeps the existing 5-gun battery but faster.
+const BASE_TURRET_COUNT = 1;
+const MAX_PLAYER_TURRETS = 5;
+const TURRET_SPACING = 10; // unscaled design px between adjacent turrets; scaled by TANK_SCALE at render time
 const JOYSTICK_RADIUS = 60;
 
 // The world is bigger than the viewport; the camera follows the player with
@@ -185,7 +194,8 @@ interface EnemyInstance {
  */
 export class GameScene extends Phaser.Scene {
   private tank!: Phaser.GameObjects.Image & { body: Phaser.Physics.Arcade.Body };
-  private turretSprite!: Phaser.GameObjects.Image;
+  private turretSprites: Phaser.GameObjects.Image[] = [];
+  private turretKey!: string;
   private tankFacing: Vector2 = { x: 1, y: 0 }; // matches the hull/turret art's neutral "facing right" orientation
   private playerHealth = new Health(PLAYER_MAX_HEALTH);
   private playerHealthText!: Phaser.GameObjects.Text;
@@ -242,6 +252,7 @@ export class GameScene extends Phaser.Scene {
     this.add.tileSprite(0, 0, WORLD_WIDTH, WORLD_HEIGHT, groundKey).setOrigin(0, 0).setDepth(-1);
 
     const { hullKey, turretKey } = ensureTankTextures(this);
+    this.turretKey = turretKey;
 
     this.tank = this.add.image(WORLD_WIDTH / 2, WORLD_HEIGHT / 2, hullKey).setScale(TANK_SCALE) as typeof this.tank;
     this.physics.add.existing(this.tank);
@@ -254,7 +265,7 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.startFollow(this.tank, true, 0.08, 0.08);
     this.cameras.main.setDeadzone(width * 0.5, height * 0.5);
 
-    this.turretSprite = this.add.image(this.tank.x, this.tank.y, turretKey).setScale(TANK_SCALE).setDepth(1);
+    this.rebuildPlayerTurrets(); // count reflects any already-owned Fire Rate levels
 
     this.playerHealthText = this.add
       .text(16, 16, `HP: ${this.playerHealth.value}`, {
@@ -562,6 +573,8 @@ export class GameScene extends Phaser.Scene {
     if (id === "maxHealth") {
       this.playerHealth.increaseMax(def.perLevel);
       this.playerHealthText.setText(`HP: ${this.playerHealth.value}`);
+    } else if (id === "fireRate") {
+      this.rebuildPlayerTurrets();
     }
 
     this.rebuildShopView();
@@ -707,9 +720,27 @@ export class GameScene extends Phaser.Scene {
       this.tank.rotation = Math.atan2(this.moveVector.y, this.moveVector.x);
     }
 
-    // Turret aims independently of the hull (AC-1.1.2).
-    this.turretSprite.setPosition(this.tank.x, this.tank.y);
-    this.turretSprite.rotation = Math.atan2(this.tankFacing.y, this.tankFacing.x);
+    // Turrets aim independently of the hull (AC-1.1.2), arranged side by
+    // side (one per Fire Rate level, see rebuildPlayerTurrets) so they all
+    // rotate together to track the current aim direction.
+    const angle = Math.atan2(this.tankFacing.y, this.tankFacing.x);
+    const offsets = turretOffsets(this.turretSprites.length, TURRET_SPACING * TANK_SCALE);
+    for (let i = 0; i < this.turretSprites.length; i++) {
+      const pos = turretPosition(this.tank, this.tankFacing, offsets[i]);
+      this.turretSprites[i].setPosition(pos.x, pos.y);
+      this.turretSprites[i].rotation = angle;
+    }
+  }
+
+  /** (Re)builds the player's turret sprites to match the current Fire Rate level (capped at MAX_PLAYER_TURRETS). */
+  private rebuildPlayerTurrets(): void {
+    for (const turret of this.turretSprites) turret.destroy();
+
+    const count = Math.min(BASE_TURRET_COUNT + this.upgradeLevels.fireRate, MAX_PLAYER_TURRETS);
+    this.turretSprites = [];
+    for (let i = 0; i < count; i++) {
+      this.turretSprites.push(this.add.image(this.tank.x, this.tank.y, this.turretKey).setScale(TANK_SCALE).setDepth(1));
+    }
   }
 
   private spawnEnemy(color: RegularColor): void {
