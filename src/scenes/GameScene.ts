@@ -14,6 +14,9 @@ import {
   type UpgradeId,
   type UpgradeLevels,
 } from "../gameplay/progression/Upgrades";
+import { ConnectomeBrain, buildEnemyBrainInputs, BRAIN_INPUT_SIZE, type BrainDecision, type BrainTrace } from "../gameplay/ai/ConnectomeBrain";
+import { loadBrainBaseline, saveBrainBaseline, type StoredBrainBaseline } from "../gameplay/ai/BrainPersistence";
+import { pickChatLine, type ChatEventType } from "../gameplay/ai/EnemyChat";
 
 const TANK_SPEED = 220; // px/s
 const TANK_SCALE = 1.5;
@@ -42,9 +45,17 @@ const SPACE_FIRE_COOLDOWN_MS = 300; // separate cap on the spacebar auto-fire sh
 
 const ENEMY_PROJECTILE_SPEED = 260;
 const ENEMY_PROJECTILE_DAMAGE_FALLBACK = 5;
-const ENEMY_PREFERRED_DISTANCE = 260; // holds roughly this far from the player to shoot from
-const ENEMY_DISTANCE_DEADZONE = 20;
+const ENEMY_PREFERRED_DISTANCE = 260; // holds roughly this far from the player to shoot from; brain input, no longer hard-enforced
 const ENEMY_RESPAWN_DELAY_MS = 1500; // delay before a replacement spawns in to keep the current wave topped up
+
+const ENEMY_BRAIN_DECISION_INTERVAL_MS = 150; // how often each enemy's brain re-samples a new move/aim action
+const ENEMY_BRAIN_REWARD_HIT = 1;
+const ENEMY_BRAIN_REWARD_MISS = -0.3; // smaller than a hit's reward -- misses vastly outnumber hits early on
+
+const ENEMY_CHAT_COOLDOWN_MS = 8000; // one line per enemy per window, comfortably longer than the display time
+const CHAT_BUBBLE_DISPLAY_MS = 5000;
+const ENEMY_IDLE_CHAT_MIN_MS = 8000;
+const ENEMY_IDLE_CHAT_MAX_MS = 15000;
 
 const PROJECTILE_LIFESPAN_MS = 1500;
 
@@ -175,6 +186,14 @@ interface EnemyInstance {
   health: Health;
   tier: EnemyTier;
   lastFiredAt: number;
+  brain: ConnectomeBrain;
+  lastDecisionAt: number;
+  currentAction: BrainDecision;
+  lifetimeReward: number;
+  chatBubbleBg: Phaser.GameObjects.Rectangle | null;
+  chatBubbleText: Phaser.GameObjects.Text | null;
+  lastChatAt: number;
+  nextIdleChatDelayMs: number;
 }
 
 /**
@@ -718,6 +737,7 @@ export class GameScene extends Phaser.Scene {
       enemy.hull.destroy();
       enemy.turret.destroy();
       enemy.healthText.destroy();
+      this.maybePromoteBrainBaseline(enemy); // don't lose a straggler's learning just because the level cleared
     }
     this.enemies = [];
   }
@@ -867,10 +887,20 @@ export class GameScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setDepth(2);
 
-    const instance: EnemyInstance = { hull, turret, healthText, health, tier, lastFiredAt: 0 };
+    const baseline = loadBrainBaseline();
+    const brain = (baseline && ConnectomeBrain.deserialize(baseline.weights)) ?? ConnectomeBrain.createRandom();
+    const currentAction = brain.decide(new Float32Array(BRAIN_INPUT_SIZE));
+
+    const instance: EnemyInstance = {
+      hull, turret, healthText, health, tier, lastFiredAt: 0,
+      brain, currentAction, lastDecisionAt: 0, lifetimeReward: 0,
+      chatBubbleBg: null, chatBubbleText: null, lastChatAt: 0,
+      nextIdleChatDelayMs: Phaser.Math.Between(ENEMY_IDLE_CHAT_MIN_MS, ENEMY_IDLE_CHAT_MAX_MS),
+    };
     (hull as unknown as { enemyInstance: EnemyInstance }).enemyInstance = instance;
 
     this.enemies.push(instance);
+    this.triggerEnemyChat(instance, "spawn");
     return instance;
   }
 
@@ -886,33 +916,141 @@ export class GameScene extends Phaser.Scene {
       const toPlayer = { x: dx / distance, y: dy / distance };
       const speed = enemy.tier.speed;
 
-      if (distance > ENEMY_PREFERRED_DISTANCE + ENEMY_DISTANCE_DEADZONE) {
-        enemy.hull.body.setVelocity(toPlayer.x * speed, toPlayer.y * speed);
-        enemy.hull.rotation = Math.atan2(toPlayer.y, toPlayer.x);
-      } else if (distance < ENEMY_PREFERRED_DISTANCE - ENEMY_DISTANCE_DEADZONE) {
-        enemy.hull.body.setVelocity(-toPlayer.x * speed, -toPlayer.y * speed);
-        enemy.hull.rotation = Math.atan2(-toPlayer.y, -toPlayer.x);
-      } else {
-        enemy.hull.body.setVelocity(0, 0);
+      // The enemy's brain decides where to move and where to aim; re-sampled
+      // periodically (not every frame) so held actions read as purposeful
+      // motion rather than jitter. Firing stays gated by the tier's own
+      // fireCooldownMs below, unchanged from before this brain existed.
+      if (now - enemy.lastDecisionAt >= ENEMY_BRAIN_DECISION_INTERVAL_MS) {
+        enemy.lastDecisionAt = now;
+        const enemyVelocity = enemy.hull.body.velocity;
+        const playerVelocity = this.tank.body.velocity;
+        const inputs = buildEnemyBrainInputs({
+          toPlayer,
+          distance,
+          preferredDistance: ENEMY_PREFERRED_DISTANCE,
+          playerVelocity: { x: playerVelocity.x, y: playerVelocity.y },
+          enemyVelocity: { x: enemyVelocity.x, y: enemyVelocity.y },
+          maxPlayerSpeed: TANK_SPEED,
+          maxEnemySpeed: enemy.tier.speed,
+        });
+        enemy.currentAction = enemy.brain.decide(inputs);
       }
 
-      // Turret always tracks the player, independent of hull facing.
+      const { move, aim } = enemy.currentAction;
+      enemy.hull.body.setVelocity(move.x * speed, move.y * speed);
+      enemy.hull.rotation = Math.atan2(move.y, move.x);
+
+      // Turret always tracks the brain's aim direction, independent of hull facing.
       enemy.turret.setPosition(enemy.hull.x, enemy.hull.y);
-      enemy.turret.rotation = Math.atan2(toPlayer.y, toPlayer.x);
+      enemy.turret.rotation = Math.atan2(aim.y, aim.x);
       enemy.healthText.setPosition(enemy.hull.x, enemy.hull.y - 32);
+      enemy.chatBubbleBg?.setPosition(enemy.hull.x, enemy.hull.y - 56);
+      enemy.chatBubbleText?.setPosition(enemy.hull.x, enemy.hull.y - 56);
+
+      if (now - enemy.lastChatAt >= enemy.nextIdleChatDelayMs) {
+        this.triggerEnemyChat(enemy, "idle");
+      }
 
       if (now - enemy.lastFiredAt < enemy.tier.fireCooldownMs) continue;
       enemy.lastFiredAt = now;
 
-      const spawn = spawnProjectile({ x: enemy.hull.x, y: enemy.hull.y }, toPlayer, ENEMY_PROJECTILE_SPEED, enemy.tier.damage);
+      const spawn = spawnProjectile({ x: enemy.hull.x, y: enemy.hull.y }, aim, ENEMY_PROJECTILE_SPEED, enemy.tier.damage);
       const projectile = this.add.circle(spawn.x, spawn.y, 5, enemy.tier.tint);
       this.enemyProjectiles.add(projectile);
       const body = projectile.body as Phaser.Physics.Arcade.Body;
       body.setVelocity(spawn.velocityX, spawn.velocityY);
       (projectile as unknown as { damage: number }).damage = spawn.damage;
+      (projectile as unknown as { firedBy: EnemyInstance }).firedBy = enemy;
+      (projectile as unknown as { firingTrace: BrainTrace }).firingTrace = enemy.currentAction.trace;
+      (projectile as unknown as { hit: boolean }).hit = false;
 
-      this.time.delayedCall(PROJECTILE_LIFESPAN_MS, () => projectile.destroy());
+      this.time.delayedCall(PROJECTILE_LIFESPAN_MS, () => {
+        if (!(projectile as unknown as { hit?: boolean }).hit) {
+          this.resolveEnemyShotReward(projectile, false);
+        }
+        projectile.destroy();
+      });
     }
+  }
+
+  /** Routes a fired shot's outcome (hit or miss) back to the firing enemy's brain as a reward. */
+  private resolveEnemyShotReward(projectile: Phaser.GameObjects.GameObject, hit: boolean): void {
+    const firedBy = (projectile as unknown as { firedBy?: EnemyInstance }).firedBy;
+    const trace = (projectile as unknown as { firingTrace?: BrainTrace }).firingTrace;
+    if (!firedBy || !trace) return;
+
+    const reward = hit ? ENEMY_BRAIN_REWARD_HIT : ENEMY_BRAIN_REWARD_MISS;
+    firedBy.brain.reinforce(reward, trace);
+    firedBy.lifetimeReward += reward;
+    this.triggerEnemyChat(firedBy, hit ? "hit" : "miss", reward);
+  }
+
+  /**
+   * Has `enemy` pick a mood (via the same brain that drives its movement/aim)
+   * and say a line for `eventType`, as long as its per-enemy chat cooldown
+   * has elapsed. When `reward` is given (hit/miss only -- there's no combat
+   * outcome to credit for spawn/death/idle chatter), that reward also
+   * reinforces the mood pick, same as it already reinforces movement/aim.
+   */
+  private triggerEnemyChat(enemy: EnemyInstance, eventType: ChatEventType, reward?: number): void {
+    const now = this.time.now;
+    if (now - enemy.lastChatAt < ENEMY_CHAT_COOLDOWN_MS) return;
+    // A miss resolves on a delayed timer (PROJECTILE_LIFESPAN_MS after firing), so the
+    // firing enemy may have already been killed and had its hull destroyed by then --
+    // its body is torn down with it, so bail out rather than read a dead reference.
+    if (!enemy.hull.body) return;
+
+    const dx = this.tank.x - enemy.hull.x;
+    const dy = this.tank.y - enemy.hull.y;
+    const distance = Math.hypot(dx, dy);
+    const toPlayer = distance > 0 ? { x: dx / distance, y: dy / distance } : { x: 1, y: 0 };
+    const enemyVelocity = enemy.hull.body.velocity;
+    const playerVelocity = this.tank.body.velocity;
+    const inputs = buildEnemyBrainInputs({
+      toPlayer,
+      distance,
+      preferredDistance: ENEMY_PREFERRED_DISTANCE,
+      playerVelocity: { x: playerVelocity.x, y: playerVelocity.y },
+      enemyVelocity: { x: enemyVelocity.x, y: enemyVelocity.y },
+      maxPlayerSpeed: TANK_SPEED,
+      maxEnemySpeed: enemy.tier.speed,
+    });
+
+    const decision = enemy.brain.decideMood(inputs);
+    if (reward !== undefined) {
+      enemy.brain.reinforceMood(reward, decision);
+    }
+
+    this.showChatBubble(enemy, pickChatLine(eventType, decision.moodName));
+
+    enemy.lastChatAt = now;
+    enemy.nextIdleChatDelayMs = Phaser.Math.Between(ENEMY_IDLE_CHAT_MIN_MS, ENEMY_IDLE_CHAT_MAX_MS);
+  }
+
+  /** Shows `text` in a bubble above `enemy` for CHAT_BUBBLE_DISPLAY_MS, following it while alive. */
+  private showChatBubble(enemy: EnemyInstance, text: string): void {
+    enemy.chatBubbleBg?.destroy();
+    enemy.chatBubbleText?.destroy();
+
+    const bubbleText = this.add
+      .text(enemy.hull.x, enemy.hull.y - 56, text, { fontFamily: "monospace", fontSize: "12px", color: "#ffffff" })
+      .setOrigin(0.5)
+      .setDepth(4);
+    const bubbleBg = this.add
+      .rectangle(enemy.hull.x, enemy.hull.y - 56, bubbleText.width + 12, bubbleText.height + 8, 0x1a1a1a, 0.85)
+      .setStrokeStyle(1, 0xffffff)
+      .setDepth(3);
+
+    enemy.chatBubbleBg = bubbleBg;
+    enemy.chatBubbleText = bubbleText;
+
+    this.time.delayedCall(CHAT_BUBBLE_DISPLAY_MS, () => {
+      if (enemy.chatBubbleBg !== bubbleBg) return; // already replaced by a newer line
+      bubbleBg.destroy();
+      bubbleText.destroy();
+      enemy.chatBubbleBg = null;
+      enemy.chatBubbleText = null;
+    });
   }
 
   private setupTouchControls(width: number): void {
@@ -1019,9 +1157,11 @@ export class GameScene extends Phaser.Scene {
     if (!instance.health.isDead) return;
 
     this.enemies.splice(index, 1);
+    this.triggerEnemyChat(instance, "death"); // before destroy() -- needs the hull's position
     instance.hull.destroy();
     instance.turret.destroy();
     instance.healthText.destroy();
+    this.maybePromoteBrainBaseline(instance);
 
     this.coins += instance.tier.coinReward;
     saveCoins(this.coins);
@@ -1048,6 +1188,8 @@ export class GameScene extends Phaser.Scene {
     if (this.isGameOver) return;
 
     const damage = (projectile as unknown as { damage: number }).damage ?? ENEMY_PROJECTILE_DAMAGE_FALLBACK;
+    (projectile as unknown as { hit: boolean }).hit = true;
+    this.resolveEnemyShotReward(projectile, true);
     projectile.destroy();
 
     this.playerHealth.takeDamage(damage);
@@ -1097,5 +1239,20 @@ export class GameScene extends Phaser.Scene {
 
     this.clearAllEnemies();
     this.startLevel();
+  }
+
+  /**
+   * Called whenever an enemy stops being updated (death, or level-clear
+   * cleanup). Re-reads the shared baseline fresh (not a spawn-time cache) so
+   * two enemies dying close together compare against each other correctly;
+   * if this enemy's own online learning beat the current best, its weights
+   * become the new baseline that every future spawn seeds from.
+   */
+  private maybePromoteBrainBaseline(instance: EnemyInstance): void {
+    const currentBaseline = loadBrainBaseline();
+    if (currentBaseline !== null && instance.lifetimeReward <= currentBaseline.score) return;
+
+    const promoted: StoredBrainBaseline = { weights: instance.brain.serialize(), score: instance.lifetimeReward };
+    saveBrainBaseline(promoted);
   }
 }
