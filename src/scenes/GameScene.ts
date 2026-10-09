@@ -870,9 +870,13 @@ export class GameScene extends Phaser.Scene {
 
     const hull = this.add.image(x, y, this.enemyHullKey).setScale(scale).setTint(tier.tint) as EnemyHullSprite;
     this.physics.add.existing(hull);
-    hull.body.setCollideWorldBounds(true);
     hull.setDepth(0);
+    // enemyGroup.add() resets collideWorldBounds to the group's default (false, since
+    // we pass no group config), so this must run AFTER the group add or it's silently
+    // clobbered -- the old chase-only enemy AI never sent enemies toward open bounds
+    // so this never surfaced; the brain's flee-when-close behavior does.
     this.enemyGroup.add(hull);
+    hull.body.setCollideWorldBounds(true);
 
     const turret = this.add.image(x, y, this.enemyTurretKey).setScale(scale).setTint(tier.tint).setDepth(1);
 
