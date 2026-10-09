@@ -239,6 +239,11 @@ export class GameScene extends Phaser.Scene {
   private deviceChoiceOverlay!: Phaser.GameObjects.Rectangle;
   private deviceChoiceContainer!: Phaser.GameObjects.Container;
 
+  private isGameOver = false;
+  private gameOverOverlay!: Phaser.GameObjects.Rectangle;
+  private gameOverContainer!: Phaser.GameObjects.Container;
+  private gameOverCoinsText!: Phaser.GameObjects.Text;
+
   constructor() {
     super("GameScene");
   }
@@ -355,6 +360,19 @@ export class GameScene extends Phaser.Scene {
     this.sessionsMenuContainer = this.add.container(width / 2, height / 2).setScrollFactor(0).setDepth(11).setVisible(false);
     this.shopMenuContainer = this.add.container(width / 2, height / 2).setScrollFactor(0).setDepth(11).setVisible(false);
 
+    this.gameOverOverlay = this.add
+      .rectangle(0, 0, width, height, 0x000000, 0.75)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(30)
+      .setVisible(false);
+
+    this.gameOverContainer = this.add.container(width / 2, height / 2).setScrollFactor(0).setDepth(31).setVisible(false);
+    const gameOverTitle = this.add.text(0, -80, "GAME OVER", { fontFamily: "monospace", fontSize: "36px", color: "#ff5252" }).setOrigin(0.5);
+    this.gameOverCoinsText = this.add.text(0, -30, "Coins: 0", { fontFamily: "monospace", fontSize: "20px", color: "#ffeb3b" }).setOrigin(0.5);
+    const restartButton = this.createMenuButton(0, 30, "Restart", () => this.restartAfterGameOver());
+    this.gameOverContainer.add([gameOverTitle, this.gameOverCoinsText, restartButton.bg, restartButton.text]);
+
     // Always-visible on-screen button to open the pause menu -- P is the
     // desktop shortcut, but touch/mobile players have no keyboard at all.
     const pauseButton = this.createMenuButton(width - 60, 30, "Pause", () => this.togglePause());
@@ -384,6 +402,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number): void {
+    if (this.isGameOver) return; // everything is frozen; the game over screen owns input now
+
     if (Phaser.Input.Keyboard.JustDown(this.pauseKey)) {
       this.togglePause();
     }
@@ -957,7 +977,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private fireToward(worldPoint: Vector2 | null, direction?: Vector2): void {
-    if (this.isPaused) return; // touch/mouse fire are event-driven, not gated by update()'s early return
+    if (this.isPaused || this.isGameOver) return; // touch/mouse fire are event-driven, not gated by update()'s early return
 
     const now = this.time.now;
     if (now - this.lastFiredAt < this.playerFireCooldownMs) return;
@@ -1025,6 +1045,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   private handlePlayerHit(projectile: Phaser.GameObjects.Arc): void {
+    if (this.isGameOver) return;
+
     const damage = (projectile as unknown as { damage: number }).damage ?? ENEMY_PROJECTILE_DAMAGE_FALLBACK;
     projectile.destroy();
 
@@ -1032,8 +1054,48 @@ export class GameScene extends Phaser.Scene {
     this.playerHealthText.setText(`HP: ${this.playerHealth.value}`);
 
     if (this.playerHealth.isDead) {
-      this.playerHealth.reset();
-      this.playerHealthText.setText(`HP: ${this.playerHealth.value}`);
+      this.triggerGameOver();
     }
+  }
+
+  private triggerGameOver(): void {
+    this.isGameOver = true;
+    this.physics.pause();
+    this.time.paused = true;
+
+    this.gameOverCoinsText.setText(`Coins: ${this.coins}`);
+    this.gameOverOverlay.setVisible(true);
+    this.gameOverContainer.setVisible(true);
+
+    this.pauseButtonBg.setVisible(false);
+    this.pauseButtonText.setVisible(false);
+    this.shootButtonBg?.setVisible(false);
+    this.shootButtonText?.setVisible(false);
+  }
+
+  /** Keeps level progress (today's persisted totalLevelsCleared) but resets coins and health for the new attempt. */
+  private restartAfterGameOver(): void {
+    this.isGameOver = false;
+    this.gameOverOverlay.setVisible(false);
+    this.gameOverContainer.setVisible(false);
+
+    this.playerHealth.reset();
+    this.playerHealthText.setText(`HP: ${this.playerHealth.value}`);
+    this.coins = 0;
+    this.coinsText.setText(`Coins: ${this.coins}`);
+
+    this.tank.setPosition(WORLD_WIDTH / 2, WORLD_HEIGHT / 2);
+    this.tank.body.setVelocity(0, 0);
+
+    this.pauseButtonBg.setVisible(true);
+    this.pauseButtonText.setVisible(true);
+    this.shootButtonBg?.setVisible(true);
+    this.shootButtonText?.setVisible(true);
+
+    this.physics.resume();
+    this.time.paused = false;
+
+    this.clearAllEnemies();
+    this.startLevel();
   }
 }
