@@ -26,6 +26,7 @@ const TANK_SCALE = 1.5;
 // turret exactly reaches MAX_PLAYER_TURRETS, so the cap is never reached early.
 const BASE_TURRET_COUNT = 1;
 const MAX_PLAYER_TURRETS = 5;
+const MULTI_TURRET_DAMAGE_PER_LEVEL = 15; // stacks with the Damage upgrade -- more barrels also hit harder
 const TURRET_SPACING = 20; // unscaled design px between adjacent turrets; scaled by TANK_SCALE at render time -- must clear the ~16px-wide turret base (see drawTurretTexture) or extra turrets overlap into an unreadable blob
 const JOYSTICK_RADIUS = 60;
 
@@ -775,7 +776,8 @@ export class GameScene extends Phaser.Scene {
   // US-1.4: these read the shop's current upgrade levels on every call rather
   // than caching a value, so a purchase takes effect immediately mid-run.
   private get playerDamage(): number {
-    return valueAtLevel(PLAYER_PROJECTILE_DAMAGE, UPGRADE_DEFS.damage.perLevel, this.upgradeLevels.damage);
+    const base = valueAtLevel(PLAYER_PROJECTILE_DAMAGE, UPGRADE_DEFS.damage.perLevel, this.upgradeLevels.damage);
+    return base + MULTI_TURRET_DAMAGE_PER_LEVEL * this.upgradeLevels.multiTurret;
   }
 
   private get playerFireCooldownMs(): number {

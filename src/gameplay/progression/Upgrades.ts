@@ -57,7 +57,7 @@ export const UPGRADE_DEFS: Record<UpgradeId, UpgradeDef> = {
   multiTurret: {
     id: "multiTurret",
     label: "Multi Turret",
-    description: "+1 turret per level, each firing its own projectile",
+    description: "+1 turret per level, each firing its own projectile; +15 damage per level",
     maxLevel: 4,
     baseCost: 100,
     costGrowth: 1.8,
