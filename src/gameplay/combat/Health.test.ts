@@ -61,4 +61,42 @@ describe("Health", () => {
     expect(health.value).toBe(10);
     expect(health.isDead).toBe(false);
   });
+
+  it("raises current by the same amount on increaseMax", () => {
+    // Arrange
+    const health = new Health(100);
+    health.takeDamage(40);
+
+    // Act
+    health.increaseMax(20);
+
+    // Assert
+    expect(health.value).toBe(80);
+  });
+
+  it("restores to the new (raised) max on reset after increaseMax", () => {
+    // Arrange
+    const health = new Health(100);
+
+    // Act
+    health.increaseMax(20);
+    health.takeDamage(999);
+    health.reset();
+
+    // Assert
+    expect(health.value).toBe(120);
+  });
+
+  it("ignores non-positive increaseMax amounts", () => {
+    // Arrange
+    const health = new Health(100);
+    health.takeDamage(50);
+
+    // Act
+    health.increaseMax(0);
+    health.increaseMax(-10);
+
+    // Assert
+    expect(health.value).toBe(50);
+  });
 });

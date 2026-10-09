@@ -4,9 +4,27 @@ import { spawnProjectile } from "../gameplay/combat/Projectile";
 import { Health } from "../gameplay/combat/Health";
 import { ensureTankTextures, ensureEnemyTankTextures } from "../gameplay/render/TankTextures";
 import { ensureGroundTexture } from "../gameplay/render/GroundTexture";
+import { turretOffsets, turretPosition } from "../gameplay/render/TurretLayout";
+import {
+  UPGRADE_DEFS,
+  UPGRADE_LIST,
+  costForNextLevel,
+  parseUpgradeLevels,
+  valueAtLevel,
+  type UpgradeId,
+  type UpgradeLevels,
+} from "../gameplay/progression/Upgrades";
 
 const TANK_SPEED = 220; // px/s
 const TANK_SCALE = 1.5;
+
+// Each Fire Rate level mounts another turret on the player's tank, visibly
+// telegraphing the upgrade -- capped at 5 regardless of the upgrade's own
+// max level, so buying the last level or two of Fire Rate no longer adds a
+// new barrel, just keeps the existing 5-gun battery but faster.
+const BASE_TURRET_COUNT = 1;
+const MAX_PLAYER_TURRETS = 5;
+const TURRET_SPACING = 10; // unscaled design px between adjacent turrets; scaled by TANK_SCALE at render time
 const JOYSTICK_RADIUS = 60;
 
 // The world is bigger than the viewport; the camera follows the player with
@@ -108,6 +126,46 @@ function saveLevelsCleared(totalLevelsCleared: number): void {
   }
 }
 
+// US-1.4: owned upgrade levels must persist across app restarts (AC-1.4.2),
+// and the coin balance that pays for them needs to survive a reload too --
+// otherwise a refresh mid-run would erase coins the player hasn't spent yet.
+const COINS_STORAGE_KEY = "tank-siege:coins";
+const UPGRADE_LEVELS_STORAGE_KEY = "tank-siege:upgradeLevels";
+
+function loadSavedCoins(): number {
+  try {
+    const raw = window.localStorage.getItem(COINS_STORAGE_KEY);
+    const parsed = raw === null ? 0 : Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function saveCoins(coins: number): void {
+  try {
+    window.localStorage.setItem(COINS_STORAGE_KEY, String(coins));
+  } catch {
+    // Best-effort only; losing persistence shouldn't break gameplay.
+  }
+}
+
+function loadSavedUpgradeLevels(): UpgradeLevels {
+  try {
+    return parseUpgradeLevels(window.localStorage.getItem(UPGRADE_LEVELS_STORAGE_KEY));
+  } catch {
+    return parseUpgradeLevels(null);
+  }
+}
+
+function saveUpgradeLevels(levels: UpgradeLevels): void {
+  try {
+    window.localStorage.setItem(UPGRADE_LEVELS_STORAGE_KEY, JSON.stringify(levels));
+  } catch {
+    // Best-effort only; losing persistence shouldn't break gameplay.
+  }
+}
+
 type EnemyHullSprite = Phaser.GameObjects.Image & { body: Phaser.Physics.Arcade.Body };
 
 interface EnemyInstance {
@@ -136,13 +194,15 @@ interface EnemyInstance {
  */
 export class GameScene extends Phaser.Scene {
   private tank!: Phaser.GameObjects.Image & { body: Phaser.Physics.Arcade.Body };
-  private turretSprite!: Phaser.GameObjects.Image;
+  private turretSprites: Phaser.GameObjects.Image[] = [];
+  private turretKey!: string;
   private tankFacing: Vector2 = { x: 1, y: 0 }; // matches the hull/turret art's neutral "facing right" orientation
   private playerHealth = new Health(PLAYER_MAX_HEALTH);
   private playerHealthText!: Phaser.GameObjects.Text;
   private levelText!: Phaser.GameObjects.Text;
-  private coins = 0;
+  private coins = loadSavedCoins(); // persists across page reloads; spent in the upgrade shop (US-1.4)
   private coinsText!: Phaser.GameObjects.Text;
+  private upgradeLevels: UpgradeLevels = loadSavedUpgradeLevels();
   private playerProjectiles!: Phaser.Physics.Arcade.Group;
 
   private enemies: EnemyInstance[] = [];
@@ -172,6 +232,7 @@ export class GameScene extends Phaser.Scene {
   private pauseOverlay!: Phaser.GameObjects.Rectangle;
   private pauseMenuContainer!: Phaser.GameObjects.Container;
   private sessionsMenuContainer!: Phaser.GameObjects.Container;
+  private shopMenuContainer!: Phaser.GameObjects.Container;
 
   private shootButtonBg: Phaser.GameObjects.Rectangle | null = null;
   private shootButtonText: Phaser.GameObjects.Text | null = null;
@@ -185,12 +246,18 @@ export class GameScene extends Phaser.Scene {
   create(): void {
     const { width, height } = this.scale;
 
+    // Re-apply any previously purchased Max HP upgrade -- playerHealth was
+    // constructed at the base value above, before upgradeLevels was known.
+    const maxHealthBonus = valueAtLevel(0, UPGRADE_DEFS.maxHealth.perLevel, this.upgradeLevels.maxHealth);
+    if (maxHealthBonus > 0) this.playerHealth.increaseMax(maxHealthBonus);
+
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 
     const groundKey = ensureGroundTexture(this);
     this.add.tileSprite(0, 0, WORLD_WIDTH, WORLD_HEIGHT, groundKey).setOrigin(0, 0).setDepth(-1);
 
     const { hullKey, turretKey } = ensureTankTextures(this);
+    this.turretKey = turretKey;
 
     this.tank = this.add.image(WORLD_WIDTH / 2, WORLD_HEIGHT / 2, hullKey).setScale(TANK_SCALE) as typeof this.tank;
     this.physics.add.existing(this.tank);
@@ -203,7 +270,7 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.startFollow(this.tank, true, 0.08, 0.08);
     this.cameras.main.setDeadzone(width * 0.5, height * 0.5);
 
-    this.turretSprite = this.add.image(this.tank.x, this.tank.y, turretKey).setScale(TANK_SCALE).setDepth(1);
+    this.rebuildPlayerTurrets(); // count reflects any already-owned Fire Rate levels
 
     this.playerHealthText = this.add
       .text(16, 16, `HP: ${this.playerHealth.value}`, {
@@ -274,9 +341,19 @@ export class GameScene extends Phaser.Scene {
     const pauseTitle = this.add.text(0, -80, "PAUSED", { fontFamily: "monospace", fontSize: "32px", color: "#ffffff" }).setOrigin(0.5);
     const resumeButton = this.createMenuButton(0, -10, "Resume", () => this.togglePause());
     const sessionsButton = this.createMenuButton(0, 40, "Sessions", () => this.showSessionsView());
-    this.pauseMenuContainer.add([pauseTitle, resumeButton.bg, resumeButton.text, sessionsButton.bg, sessionsButton.text]);
+    const shopButton = this.createMenuButton(0, 90, "Shop", () => this.showShopView());
+    this.pauseMenuContainer.add([
+      pauseTitle,
+      resumeButton.bg,
+      resumeButton.text,
+      sessionsButton.bg,
+      sessionsButton.text,
+      shopButton.bg,
+      shopButton.text,
+    ]);
 
     this.sessionsMenuContainer = this.add.container(width / 2, height / 2).setScrollFactor(0).setDepth(11).setVisible(false);
+    this.shopMenuContainer = this.add.container(width / 2, height / 2).setScrollFactor(0).setDepth(11).setVisible(false);
 
     // Always-visible on-screen button to open the pause menu -- P is the
     // desktop shortcut, but touch/mobile players have no keyboard at all.
@@ -337,6 +414,7 @@ export class GameScene extends Phaser.Scene {
 
     this.pauseOverlay.setVisible(this.isPaused);
     this.sessionsMenuContainer.setVisible(false); // always land back on the main pause view
+    this.shopMenuContainer.setVisible(false);
     this.pauseButtonBg.setVisible(!this.isPaused);
     this.pauseButtonText.setVisible(!this.isPaused);
     this.shootButtonBg?.setVisible(!this.isPaused);
@@ -464,6 +542,99 @@ export class GameScene extends Phaser.Scene {
     this.sessionsMenuContainer.add(elements);
   }
 
+  private showShopView(): void {
+    this.pauseMenuContainer.setVisible(false);
+    this.rebuildShopView();
+    this.shopMenuContainer.setVisible(true);
+  }
+
+  /** Rebuilt each time it's opened (and after every purchase), since levels/costs/affordability all change as you buy. */
+  private rebuildShopView(): void {
+    this.shopMenuContainer.removeAll(true);
+
+    const elements: Phaser.GameObjects.GameObject[] = [];
+    elements.push(this.add.text(0, -170, "SHOP", { fontFamily: "monospace", fontSize: "26px", color: "#ffffff" }).setOrigin(0.5).setScrollFactor(0));
+    elements.push(
+      this.add
+        .text(0, -130, `Coins: ${this.coins}`, { fontFamily: "monospace", fontSize: "18px", color: "#ffd700" })
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+    );
+
+    let y = -80;
+    const rowGap = 50;
+
+    for (const def of UPGRADE_LIST) {
+      const level = this.upgradeLevels[def.id];
+      const cost = costForNextLevel(def, level);
+      const maxed = cost === null;
+      const affordable = !maxed && this.coins >= cost;
+
+      const label = maxed ? `${def.label}  Lv ${level}/${def.maxLevel}  MAXED` : `${def.label}  Lv ${level}/${def.maxLevel}  —  ${cost}c`;
+      const rowColor = maxed ? 0x333333 : affordable ? 0x2e7d32 : 0x5d2b2b;
+      const textColor = maxed ? "#9e9e9e" : "#ffffff";
+
+      const row = this.createShopRow(0, y, label, rowColor, textColor, affordable, () => this.purchaseUpgrade(def.id));
+      elements.push(row.bg, row.text);
+      y += rowGap;
+    }
+
+    const back = this.createMenuButton(0, y + 10, "Back", () => {
+      this.shopMenuContainer.setVisible(false);
+      this.pauseMenuContainer.setVisible(true);
+    });
+    elements.push(back.bg, back.text);
+
+    this.shopMenuContainer.add(elements);
+  }
+
+  /** Like createMenuButton, but only wired up as clickable when `clickable` is true (AC-1.4.3: blocked/disabled, not just visually dimmed). */
+  private createShopRow(
+    x: number,
+    y: number,
+    label: string,
+    color: number,
+    textColor: string,
+    clickable: boolean,
+    onBuy: () => void
+  ): { bg: Phaser.GameObjects.Rectangle; text: Phaser.GameObjects.Text } {
+    const text = this.add.text(x, y, label, { fontFamily: "monospace", fontSize: "16px", color: textColor }).setOrigin(0.5).setScrollFactor(0);
+    const bg = this.add.rectangle(x, y, text.width + 32, text.height + 16, color).setStrokeStyle(2, 0xffffff).setScrollFactor(0);
+    text.setDepth(bg.depth + 1);
+
+    if (clickable) {
+      bg.setInteractive({ useHandCursor: true });
+      bg.on("pointerover", () => bg.setFillStyle(0x388e3c));
+      bg.on("pointerout", () => bg.setFillStyle(color));
+      bg.on("pointerdown", onBuy);
+    }
+
+    return { bg, text };
+  }
+
+  /** Deducts coins, bumps the level, applies the effect, persists, and refreshes the shop view (AC-1.4.2). */
+  private purchaseUpgrade(id: UpgradeId): void {
+    const def = UPGRADE_DEFS[id];
+    const level = this.upgradeLevels[id];
+    const cost = costForNextLevel(def, level);
+    if (cost === null || this.coins < cost) return; // maxed or unaffordable -- the row shouldn't be clickable in that state, but guard anyway
+
+    this.coins -= cost;
+    this.upgradeLevels[id] = level + 1;
+    saveCoins(this.coins);
+    saveUpgradeLevels(this.upgradeLevels);
+    this.coinsText.setText(`Coins: ${this.coins}`);
+
+    if (id === "maxHealth") {
+      this.playerHealth.increaseMax(def.perLevel);
+      this.playerHealthText.setText(`HP: ${this.playerHealth.value}`);
+    } else if (id === "fireRate") {
+      this.rebuildPlayerTurrets();
+    }
+
+    this.rebuildShopView();
+  }
+
   /** A "session" is one lap of SESSION_LENGTH levels (red -> blue -> purple -> gold -> boss). */
   private getCompletedSessionCount(): number {
     return Math.floor(this.totalLevelsCleared / SESSION_LENGTH);
@@ -547,13 +718,31 @@ export class GameScene extends Phaser.Scene {
     };
   }
 
-  /** Spacebar: fire at most once per SPACE_FIRE_COOLDOWN_MS, auto-aimed at the nearest enemy. */
+  // US-1.4: these read the shop's current upgrade levels on every call rather
+  // than caching a value, so a purchase takes effect immediately mid-run.
+  private get playerDamage(): number {
+    return valueAtLevel(PLAYER_PROJECTILE_DAMAGE, UPGRADE_DEFS.damage.perLevel, this.upgradeLevels.damage);
+  }
+
+  private get playerFireCooldownMs(): number {
+    return valueAtLevel(PLAYER_FIRE_COOLDOWN_MS, UPGRADE_DEFS.fireRate.perLevel, this.upgradeLevels.fireRate);
+  }
+
+  private get spaceFireCooldownMs(): number {
+    return valueAtLevel(SPACE_FIRE_COOLDOWN_MS, UPGRADE_DEFS.fireRate.perLevel, this.upgradeLevels.fireRate);
+  }
+
+  private get playerMoveSpeed(): number {
+    return valueAtLevel(TANK_SPEED, UPGRADE_DEFS.moveSpeed.perLevel, this.upgradeLevels.moveSpeed);
+  }
+
+  /** Spacebar: fire at most once per spaceFireCooldownMs, auto-aimed at the nearest enemy. */
   private fireAtEnemy(): void {
     const target = this.findNearestEnemy();
     if (!target) return;
 
     const now = this.time.now;
-    if (now - this.lastSpaceFiredAt < SPACE_FIRE_COOLDOWN_MS) return;
+    if (now - this.lastSpaceFiredAt < this.spaceFireCooldownMs) return;
 
     const dx = target.hull.x - this.tank.x;
     const dy = target.hull.y - this.tank.y;
@@ -586,9 +775,27 @@ export class GameScene extends Phaser.Scene {
       this.tank.rotation = Math.atan2(this.moveVector.y, this.moveVector.x);
     }
 
-    // Turret aims independently of the hull (AC-1.1.2).
-    this.turretSprite.setPosition(this.tank.x, this.tank.y);
-    this.turretSprite.rotation = Math.atan2(this.tankFacing.y, this.tankFacing.x);
+    // Turrets aim independently of the hull (AC-1.1.2), arranged side by
+    // side (one per Fire Rate level, see rebuildPlayerTurrets) so they all
+    // rotate together to track the current aim direction.
+    const angle = Math.atan2(this.tankFacing.y, this.tankFacing.x);
+    const offsets = turretOffsets(this.turretSprites.length, TURRET_SPACING * TANK_SCALE);
+    for (let i = 0; i < this.turretSprites.length; i++) {
+      const pos = turretPosition(this.tank, this.tankFacing, offsets[i]);
+      this.turretSprites[i].setPosition(pos.x, pos.y);
+      this.turretSprites[i].rotation = angle;
+    }
+  }
+
+  /** (Re)builds the player's turret sprites to match the current Fire Rate level (capped at MAX_PLAYER_TURRETS). */
+  private rebuildPlayerTurrets(): void {
+    for (const turret of this.turretSprites) turret.destroy();
+
+    const count = Math.min(BASE_TURRET_COUNT + this.upgradeLevels.fireRate, MAX_PLAYER_TURRETS);
+    this.turretSprites = [];
+    for (let i = 0; i < count; i++) {
+      this.turretSprites.push(this.add.image(this.tank.x, this.tank.y, this.turretKey).setScale(TANK_SCALE).setDepth(1));
+    }
   }
 
   private spawnEnemy(color: RegularColor): void {
@@ -745,14 +952,15 @@ export class GameScene extends Phaser.Scene {
   }
 
   private applyMovement(_delta: number): void {
-    this.tank.body.setVelocity(this.moveVector.x * TANK_SPEED, this.moveVector.y * TANK_SPEED);
+    const speed = this.playerMoveSpeed;
+    this.tank.body.setVelocity(this.moveVector.x * speed, this.moveVector.y * speed);
   }
 
   private fireToward(worldPoint: Vector2 | null, direction?: Vector2): void {
     if (this.isPaused) return; // touch/mouse fire are event-driven, not gated by update()'s early return
 
     const now = this.time.now;
-    if (now - this.lastFiredAt < PLAYER_FIRE_COOLDOWN_MS) return;
+    if (now - this.lastFiredAt < this.playerFireCooldownMs) return;
 
     let aim = direction ?? this.tankFacing;
     if (worldPoint) {
@@ -766,7 +974,7 @@ export class GameScene extends Phaser.Scene {
 
     this.lastFiredAt = now;
 
-    const spawn = spawnProjectile({ x: this.tank.x, y: this.tank.y }, aim, PLAYER_PROJECTILE_SPEED, PLAYER_PROJECTILE_DAMAGE);
+    const spawn = spawnProjectile({ x: this.tank.x, y: this.tank.y }, aim, PLAYER_PROJECTILE_SPEED, this.playerDamage);
     const projectile = this.add.circle(spawn.x, spawn.y, 5, 0xffeb3b);
     this.playerProjectiles.add(projectile);
     const body = projectile.body as Phaser.Physics.Arcade.Body;
@@ -796,6 +1004,7 @@ export class GameScene extends Phaser.Scene {
     instance.healthText.destroy();
 
     this.coins += instance.tier.coinReward;
+    saveCoins(this.coins);
     this.coinsText.setText(`Coins: ${this.coins}`);
 
     this.killsThisLevel += 1;

@@ -6,7 +6,7 @@
 export class Health {
   private current: number;
 
-  constructor(private readonly max: number) {
+  constructor(private max: number) {
     this.current = max;
   }
 
@@ -25,5 +25,12 @@ export class Health {
 
   reset(): void {
     this.current = this.max;
+  }
+
+  /** Raises the ceiling (a Max HP upgrade) and heals by the same amount, so buying it is felt immediately. */
+  increaseMax(amount: number): void {
+    if (amount <= 0) return;
+    this.max += amount;
+    this.current += amount;
   }
 }
