@@ -33,6 +33,8 @@ const JOYSTICK_RADIUS = 60;
 // a deadzone, so the map only scrolls once the player nears the screen edge.
 const WORLD_WIDTH = 2400;
 const WORLD_HEIGHT = 2400;
+const BORDER_THICKNESS = 12; // drawn just inside the world edge so it reads as a wall, not a crop line
+const BORDER_COLOR = 0xffca28;
 const MIN_SPAWN_DISTANCE_FROM_PLAYER = 400;
 const MAX_SPAWN_DISTANCE_FROM_PLAYER = 1200;
 
@@ -278,6 +280,19 @@ export class GameScene extends Phaser.Scene {
 
     const groundKey = ensureGroundTexture(this);
     this.add.tileSprite(0, 0, WORLD_WIDTH, WORLD_HEIGHT, groundKey).setOrigin(0, 0).setDepth(-1);
+
+    // Visual border matching the physics/camera bounds below, so the map edge
+    // the player and enemies are actually clamped to is clearly marked, not
+    // just an invisible wall.
+    this.add
+      .rectangle(
+        WORLD_WIDTH / 2,
+        WORLD_HEIGHT / 2,
+        WORLD_WIDTH - BORDER_THICKNESS,
+        WORLD_HEIGHT - BORDER_THICKNESS
+      )
+      .setStrokeStyle(BORDER_THICKNESS, BORDER_COLOR, 1)
+      .setDepth(-0.5);
 
     const { hullKey, turretKey } = ensureTankTextures(this);
     this.turretKey = turretKey;
