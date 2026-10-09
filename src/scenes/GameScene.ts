@@ -27,7 +27,7 @@ const TANK_SCALE = 1.5;
 // new barrel, just keeps the existing 5-gun battery but faster.
 const BASE_TURRET_COUNT = 1;
 const MAX_PLAYER_TURRETS = 5;
-const TURRET_SPACING = 10; // unscaled design px between adjacent turrets; scaled by TANK_SCALE at render time
+const TURRET_SPACING = 20; // unscaled design px between adjacent turrets; scaled by TANK_SCALE at render time -- must clear the ~16px-wide turret base (see drawTurretTexture) or extra turrets overlap into an unreadable blob
 const JOYSTICK_RADIUS = 60;
 
 // The world is bigger than the viewport; the camera follows the player with
