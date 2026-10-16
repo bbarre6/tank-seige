@@ -50,6 +50,19 @@ const ENEMY_PROJECTILE_DAMAGE_FALLBACK = 5;
 const ENEMY_PREFERRED_DISTANCE = 260; // holds roughly this far from the player to shoot from; brain input, no longer hard-enforced
 const ENEMY_RESPAWN_DELAY_MS = 1500; // delay before a replacement spawns in to keep the current wave topped up
 
+const ENEMY_LABEL_BASE_FONT_SIZE = 14;
+const BOSS_LABEL_BASE_FONT_SIZE = 18;
+const ENEMY_LABEL_FONT_SCALE = 1.3;
+const ENEMY_LABEL_SIZE_INDICATOR = "▲"; // marks that this label's text has been scaled up, so the bump is visually obvious, not just measurably bigger
+
+function scaledLabelFontPx(baseSize: number): string {
+  return `${Math.round(baseSize * ENEMY_LABEL_FONT_SCALE)}px`;
+}
+
+function formatEnemyLabel(tierLabel: string, healthValue: number): string {
+  return `${ENEMY_LABEL_SIZE_INDICATOR} ${tierLabel} ${healthValue}`;
+}
+
 const ENEMY_BRAIN_DECISION_INTERVAL_MS = 150; // how often each enemy's brain re-samples a new move/aim action
 const ENEMY_BRAIN_REWARD_HIT = 1;
 const ENEMY_BRAIN_REWARD_MISS = -0.3; // smaller than a hit's reward -- misses vastly outnumber hits early on
@@ -856,12 +869,12 @@ export class GameScene extends Phaser.Scene {
 
   private spawnEnemy(color: RegularColor): void {
     const tier = this.getScaledTier(ENEMY_TIERS[color], this.totalLevelsCleared);
-    this.createEnemyInstance(tier, TANK_SCALE, 32, "#ffffff", "14px");
+    this.createEnemyInstance(tier, TANK_SCALE, 32, "#ffffff", scaledLabelFontPx(ENEMY_LABEL_BASE_FONT_SIZE));
   }
 
   /** Fixed stats, not scaled by levels cleared -- see ENEMY_TIERS.boss. */
   private spawnBoss(): void {
-    this.createEnemyInstance(ENEMY_TIERS.boss, BOSS_SCALE, 40, "#ff5252", "18px");
+    this.createEnemyInstance(ENEMY_TIERS.boss, BOSS_SCALE, 40, "#ff5252", scaledLabelFontPx(BOSS_LABEL_BASE_FONT_SIZE));
   }
 
   /** Random position within the world, biased to a band around the player so spawns are neither point-blank nor absurdly far. */
@@ -899,7 +912,7 @@ export class GameScene extends Phaser.Scene {
 
     const health = new Health(tier.maxHealth);
     const healthText = this.add
-      .text(x, y - labelOffsetY, `${tier.label} ${health.value}`, {
+      .text(x, y - labelOffsetY, formatEnemyLabel(tier.label, health.value), {
         fontFamily: "monospace",
         fontSize,
         color: textColor,
@@ -1179,7 +1192,7 @@ export class GameScene extends Phaser.Scene {
     if (index === -1) return; // already defeated by another projectile this frame
 
     instance.health.takeDamage(damage);
-    instance.healthText.setText(`${instance.tier.label} ${instance.health.value}`);
+    instance.healthText.setText(formatEnemyLabel(instance.tier.label, instance.health.value));
     if (!instance.health.isDead) return;
 
     this.enemies.splice(index, 1);
