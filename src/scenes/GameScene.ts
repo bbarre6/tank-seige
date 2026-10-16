@@ -52,6 +52,7 @@ const ENEMY_RESPAWN_DELAY_MS = 1500; // delay before a replacement spawns in to 
 
 const ENEMY_LABEL_BASE_FONT_SIZE = 14;
 const BOSS_LABEL_BASE_FONT_SIZE = 18;
+const CHAT_BUBBLE_BASE_FONT_SIZE = 12;
 const ENEMY_LABEL_FONT_SCALE = 1.3;
 const ENEMY_LABEL_SIZE_INDICATOR = "▲"; // marks that this label's text has been scaled up, so the bump is visually obvious, not just measurably bigger
 
@@ -61,6 +62,10 @@ function scaledLabelFontPx(baseSize: number): string {
 
 function formatEnemyLabel(tierLabel: string, healthValue: number): string {
   return `${ENEMY_LABEL_SIZE_INDICATOR} ${tierLabel} ${healthValue}`;
+}
+
+function formatEnemyChat(text: string): string {
+  return `${ENEMY_LABEL_SIZE_INDICATOR} ${text}`;
 }
 
 const ENEMY_BRAIN_DECISION_INTERVAL_MS = 150; // how often each enemy's brain re-samples a new move/aim action
@@ -1066,7 +1071,11 @@ export class GameScene extends Phaser.Scene {
     enemy.chatBubbleText?.destroy();
 
     const bubbleText = this.add
-      .text(enemy.hull.x, enemy.hull.y - 56, text, { fontFamily: "monospace", fontSize: "12px", color: "#ffffff" })
+      .text(enemy.hull.x, enemy.hull.y - 56, formatEnemyChat(text), {
+        fontFamily: "monospace",
+        fontSize: scaledLabelFontPx(CHAT_BUBBLE_BASE_FONT_SIZE),
+        color: "#ffffff",
+      })
       .setOrigin(0.5)
       .setDepth(4);
     const bubbleBg = this.add
